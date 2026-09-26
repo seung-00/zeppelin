@@ -11,9 +11,14 @@
  */
 
 import { Injectable } from '@angular/core';
-import { parseBooleanFlag } from './query-flag.util';
+import { parseBooleanFlag, readLocationFlag } from './query-flag.util';
 
-export type ReactSurface = 'publishedParagraph' | 'paragraphFooter' | 'configurationTable' | 'notebookRepoList';
+export type ReactSurface =
+  | 'publishedParagraph'
+  | 'paragraphFooter'
+  | 'configurationTable'
+  | 'notebookRepoList'
+  | 'assistantPanel';
 
 interface ReactSurfaceConfig {
   queryParam: string;
@@ -31,6 +36,10 @@ const SURFACES: Record<ReactSurface, ReactSurfaceConfig> = {
   },
   configurationTable: {
     queryParam: 'reactConfiguration',
+    defaultEnabled: false
+  },
+  assistantPanel: {
+    queryParam: 'reactAssistant',
     defaultEnabled: false
   },
   notebookRepoList: {
@@ -54,8 +63,15 @@ export class ReactFeatureService {
     const config = SURFACES[surface];
 
     const fromQuery = parseBooleanFlag(source?.get(config.queryParam));
+    const fromLocation = surface === 'assistantPanel' ? readLocationFlag(config.queryParam) : null;
+    if (fromQuery === true || fromLocation === true) {
+      return true;
+    }
     if (fromQuery !== null) {
       return fromQuery;
+    }
+    if (fromLocation !== null) {
+      return fromLocation;
     }
 
     return config.defaultEnabled;

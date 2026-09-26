@@ -10,6 +10,7 @@
  * limitations under the License.
  */
 
+import type { AssistantSendMessage, AssistantSocketEvent } from '../assistant';
 import { AuthInfo, ErrorInfo } from './message-common.interface';
 import {
   CheckpointNote,
@@ -124,10 +125,12 @@ export interface MessageReceiveDataTypeMap {
   [OP.ANGULAR_OBJECT_REMOVE]: AngularObjectRemove;
   [OP.PARAS_INFO]: ParasInfo;
   [OP.NOTE_REVISION_FOR_COMPARE]: NoteRevisionForCompareReceived;
+  [OP.ASSISTANT_EVENT]: AssistantSocketEvent;
 }
 
 export interface MessageSendDataTypeMap {
   [OP.PING]: undefined;
+  [OP.ASSISTANT_SEND_MESSAGE]: AssistantSendMessage;
   [OP.LIST_NOTES]: undefined;
   [OP.GET_HOME_NOTE]: undefined;
   [OP.RESTORE_ALL]: undefined;

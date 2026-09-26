@@ -10,5 +10,6 @@
  * limitations under the License.
  */
 
+export * from './assistant';
 export * from './interfaces/public-api';
 export * from './message';

@@ -11,7 +11,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { parseBooleanFlag } from './query-flag.util';
+import { parseBooleanFlag, readLocationFlag } from './query-flag.util';
 
 describe('parseBooleanFlag', () => {
   it.each([
@@ -24,5 +24,18 @@ describe('parseBooleanFlag', () => {
     ['TRUE', null]
   ])('parses %s as %s', (value, expected) => {
     expect(parseBooleanFlag(value)).toBe(expected);
+  });
+});
+
+describe('readLocationFlag', () => {
+  it.each([
+    ['', '#/notebook/n', null],
+    ['?flag=true', '', true],
+    ['', '#/notebook/n?flag', true],
+    ['?flag=false', '#/notebook/n', false],
+    ['?flag=false', '#/notebook/n?flag=true', true],
+    ['?flag=1', '#/notebook/n', null]
+  ])('reads search %s and hash %s as %s', (search, hash, expected) => {
+    expect(readLocationFlag('flag', { search, hash })).toBe(expected);
   });
 });

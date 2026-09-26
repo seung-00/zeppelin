@@ -20,3 +20,24 @@ export const parseBooleanFlag = (value: string | null | undefined): boolean | nu
   }
   return null;
 };
+
+export type FlagLocation = Pick<Location, 'search' | 'hash'>;
+
+/**
+ * Reads a boolean flag from the real query string (`/?flag#/route`) and the hash-route
+ * query (`#/route?flag`). `true` in either place wins; otherwise `false`, else null.
+ */
+export const readLocationFlag = (name: string, location: FlagLocation = window.location): boolean | null => {
+  try {
+    const values = [
+      parseBooleanFlag(new URLSearchParams(location.search).get(name)),
+      parseBooleanFlag(new URLSearchParams(location.hash.split('?')[1] ?? '').get(name))
+    ];
+    if (values.includes(true)) {
+      return true;
+    }
+    return values.includes(false) ? false : null;
+  } catch {
+    return null;
+  }
+};

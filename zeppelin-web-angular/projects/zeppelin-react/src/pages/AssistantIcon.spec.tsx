@@ -9,16 +9,25 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-import { render } from '@testing-library/react';
+import { fireEvent, render } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import { AssistantIcon } from './AssistantIcon';
 
-describe('AssistantIcon', () => {
-  it('shows the Zeppelin mark with an AI badge and stays out of the accessibility tree', () => {
-    const { container } = render(<AssistantIcon />);
+describe('AssistantIcon arrival', () => {
+  it('waits for the logo and plays the arrival only once per mount', () => {
+    const { container, rerender } = render(<AssistantIcon />);
     const icon = container.querySelector('.assistant-brand-icon')!;
-    expect(icon.getAttribute('aria-hidden')).toBe('true');
-    expect(container.querySelector('img')?.getAttribute('alt')).toBe('');
-    expect(icon.textContent).toBe('AI');
+    const logo = container.querySelector('img')!;
+    expect(icon.classList.contains('assistant-brand-icon-arriving')).toBe(false);
+    fireEvent.load(logo);
+    expect(icon.classList.contains('assistant-brand-icon-arriving')).toBe(true);
+    // jsdom lacks AnimationEvent, so React uses its WebKit event fallback.
+    const end = new Event('webkitAnimationEnd', { bubbles: true });
+    Object.defineProperty(end, 'animationName', { value: 'assistant-iridescent-arrival' });
+    fireEvent(icon, end);
+    expect(icon.classList.contains('assistant-brand-icon-arriving')).toBe(false);
+    rerender(<AssistantIcon />);
+    fireEvent.load(logo);
+    expect(icon.classList.contains('assistant-brand-icon-arriving')).toBe(false);
   });
 });

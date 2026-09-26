@@ -9,13 +9,30 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+import { useState } from 'react';
 import './AssistantIcon.css';
 
 // Reuse the shell's original Zeppelin mark, keeping the AI label separate.
 // The containing button supplies the accessible name.
-export const AssistantIcon = () => (
-  <span className="assistant-brand-icon" aria-hidden="true">
-    <img src="assets/images/zeppelin_svg_logo.svg" alt="" draggable={false} width="28" height="18" />
-    <span className="assistant-brand-icon-label">AI</span>
-  </span>
-);
+export const AssistantIcon = () => {
+  const [arrival, setArrival] = useState<'loading' | 'intro' | 'ready'>('loading');
+  return (
+    <span
+      className={`assistant-brand-icon${arrival === 'intro' ? ' assistant-brand-icon-arriving' : ''}`}
+      aria-hidden="true"
+      onAnimationEnd={event => {
+        if (event.animationName === 'assistant-iridescent-arrival') setArrival('ready');
+      }}
+    >
+      <img
+        src="assets/images/zeppelin_svg_logo.svg"
+        alt=""
+        draggable={false}
+        width="28"
+        height="18"
+        onLoad={() => setArrival(current => (current === 'loading' ? 'intro' : current))}
+      />
+      <span className="assistant-brand-icon-label">AI</span>
+    </span>
+  );
+};

@@ -1,0 +1,13 @@
+{
+  "name": "cli-openai-shim",
+  "private": true,
+  "type": "module",
+  "license": "Apache-2.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node cli-shim.mjs",
+    "test": "node --test cli-shim.test.mjs"
+  }
+}

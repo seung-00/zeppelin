@@ -45,6 +45,7 @@
           <nz-resize-handle nzDirection="right"><div class="sidebar-resize"></div></nz-resize-handle>
         }
       </div>
+      <div zeppelin-assistant-slot="panel"></div>
       <div class="notebook-area">
         @if (activatedExtension !== 'hide' && permissions) {
           <div class="extension-area">
@@ -102,6 +103,7 @@
                 [last]="last"
                 [useReactFooter]="useReactFooter"
                 [attr.data-testid]="p.id"
+                [attr.data-paragraph-id]="p.id"
                 (selectAtIndex)="onSelectAtIndex($event)"
                 (selected)="onParagraphSelect($event)"
                 (triggerSaveParagraph)="saveParagraph($event)"
@@ -113,5 +115,8 @@
         </div>
       </div>
     </div>
+    @if (!viewOnly && !revisionView && note.config.looknfeel !== 'report') {
+      <zeppelin-assistant-host [note]="note" [activeParagraphId]="selectId"></zeppelin-assistant-host>
+    }
   </div>
 }

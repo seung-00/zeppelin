@@ -1,0 +1,106 @@
+/*
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+.inline-assistant {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--inline-assistant-border);
+  border-radius: 8px;
+  font-size: 12px;
+  line-height: 20px;
+}
+.inline-assistant-composer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.inline-assistant-label {
+  font-size: 11px;
+  font-weight: 600;
+}
+.inline-assistant-composer .zeppelin-ai-input-textarea,
+.inline-assistant-composer textarea {
+  flex: 1;
+  min-width: 0;
+}
+.inline-assistant-composer textarea::placeholder {
+  color: var(--inline-assistant-muted);
+  opacity: 1;
+}
+.inline-assistant-composer textarea {
+  resize: none;
+  font-size: 12px;
+  line-height: 20px;
+  padding: 1px 6px;
+}
+.inline-assistant-actions {
+  display: flex;
+  flex: none;
+  gap: 4px;
+}
+.inline-assistant-actions .zeppelin-ai-btn {
+  height: 24px;
+  padding: 0 8px;
+  font-size: 12px;
+}
+.inline-assistant .zeppelin-ai-btn:focus-visible {
+  outline: 2px solid var(--inline-assistant-accent);
+  outline-offset: 2px;
+}
+
+.inline-assistant-paragraph {
+  padding: 0;
+  border: 0;
+}
+.inline-assistant-paragraph .inline-assistant-composer {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+}
+.inline-assistant-paragraph .inline-assistant-label {
+  display: none;
+}
+.inline-assistant-paragraph .inline-assistant-composer textarea.zeppelin-ai-input {
+  padding: 8px 10px;
+  color: var(--inline-assistant-text);
+  border-color: var(--inline-assistant-border);
+  font-size: 13px;
+  line-height: 20px;
+  border-radius: 8px;
+}
+/* Match the elevated popover surface in every interaction state. */
+.assistant-paragraph-popover .inline-assistant-paragraph .inline-assistant-composer textarea.zeppelin-ai-input {
+  background-color: var(--inline-assistant-surface);
+}
+.inline-assistant-paragraph .inline-assistant-actions {
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+}
+.inline-assistant-paragraph .inline-assistant-actions small {
+  color: var(--inline-assistant-muted);
+  font-size: 11px;
+}
+.inline-assistant-paragraph .inline-assistant-actions .zeppelin-ai-btn {
+  height: 32px;
+  padding: 0 14px;
+  border-radius: 6px;
+}
+@media (max-width: 640px) {
+  .inline-assistant-composer {
+    flex-wrap: wrap;
+  }
+  .inline-assistant-actions {
+    margin-left: auto;
+  }
+}

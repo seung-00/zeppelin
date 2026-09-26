@@ -1,0 +1,66 @@
+/*
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+.assistant-brand-icon {
+  position: relative;
+  display: inline-block;
+  flex: none;
+  width: 26px;
+  height: 26px;
+  border-radius: 5px;
+  background: transparent;
+  vertical-align: middle;
+}
+.assistant-brand-icon img {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 20px;
+  height: 15px;
+  object-fit: contain;
+}
+.assistant-brand-icon-label {
+  position: absolute;
+  right: 2px;
+  bottom: 2px;
+  display: grid;
+  place-items: center;
+  box-sizing: border-box;
+  width: 17px;
+  height: 14px;
+  padding: 0 1px;
+  border: 1px solid rgba(48, 71, 91, 0.24);
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.94);
+  color: #203447;
+  font-family: Arial, sans-serif;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 11px;
+  letter-spacing: 0;
+  transition:
+    border-color 160ms ease-out,
+    background-color 160ms ease-out;
+}
+.zeppelin-ai-btn:not(:disabled):hover .assistant-brand-icon-label,
+.zeppelin-ai-btn[aria-expanded='true'] .assistant-brand-icon-label,
+.zeppelin-ai-btn[aria-pressed='true'] .assistant-brand-icon-label {
+  border-color: #3071a9;
+  background: #fff;
+}
+.zeppelin-ai-btn:disabled .assistant-brand-icon {
+  opacity: 0.45;
+}
+@media (prefers-reduced-motion: reduce) {
+  .assistant-brand-icon-label {
+    transition: none;
+  }
+}

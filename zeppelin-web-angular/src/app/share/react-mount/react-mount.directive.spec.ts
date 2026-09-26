@@ -187,4 +187,88 @@ describe('ReactMountDirective', () => {
     expect(mountedProps!.repositories).toBe(repositories);
     expect(mountedProps!.readOnly).toBe(false);
   });
+  it('preserves transport Promise and AsyncIterable results and propagates failures', async () => {
+    const ngZone = new NgZone({});
+    let mountedProps!: ReactProps;
+    const remote: ReactExposedModule = {
+      mount: (_element, props) => {
+        mountedProps = props;
+        return { update: vi.fn(), unmount: vi.fn() };
+      }
+    };
+    const loader = { loadModule: vi.fn(async () => remote) };
+    const directive = new ReactMountDirective(
+      new ElementRef(document.createElement('div')),
+      ngZone,
+      loader as unknown as ReactRemoteLoaderService
+    );
+    const promise = Promise.resolve([{ id: 'thread' }]);
+    const events = (async function* () {
+      yield { type: 'run.completed' };
+    })();
+    const failure = new Error('transport failed');
+    directive.module = './AssistantPanel';
+    directive.reactRethrowCallbackErrors = true;
+    directive.reactProps = {
+      listThreads: () => promise,
+      openRun: () => events,
+      getMessages: () => Promise.reject(failure),
+      createThread: () => {
+        throw failure;
+      }
+    };
+    directive.ngOnChanges({ module: new SimpleChange(undefined, directive.module, true) });
+    await vi.waitFor(() => expect(mountedProps).toBeDefined());
+    const listThreads = mountedProps.listThreads as () => Promise<unknown>;
+    const openRun = mountedProps.openRun as () => AsyncIterable<{ type: string }>;
+    const getMessages = mountedProps.getMessages as () => Promise<unknown>;
+    const createThread = mountedProps.createThread as () => unknown;
+    expect(ngZone.runOutsideAngular(listThreads)).toBe(promise);
+    expect(ngZone.runOutsideAngular(openRun)).toBe(events);
+    await expect(openRun()[Symbol.asyncIterator]().next()).resolves.toEqual({
+      value: { type: 'run.completed' },
+      done: false
+    });
+    await expect(getMessages()).rejects.toBe(failure);
+    expect(createThread).toThrow(failure);
+    directive.ngOnDestroy();
+  });
+
+  it('logs synchronous host callback failures by default and keeps wrapper identity stable', async () => {
+    const ngZone = new NgZone({});
+    const update = vi.fn();
+    let mountedProps!: ReactProps;
+    const remote: ReactExposedModule = {
+      mount: (_element, props) => {
+        mountedProps = props;
+        return { update, unmount: vi.fn() };
+      }
+    };
+    const loader = { loadModule: vi.fn(async () => remote) };
+    const directive = new ReactMountDirective(
+      new ElementRef(document.createElement('div')),
+      ngZone,
+      loader as unknown as ReactRemoteLoaderService
+    );
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const stable = vi.fn(() => 'value');
+    const failing = () => {
+      throw new Error('host failed');
+    };
+    directive.module = './ParagraphFooter';
+    directive.reactProps = { stable, failing };
+    directive.ngOnChanges({ module: new SimpleChange(undefined, directive.module, true) });
+    await vi.waitFor(() => expect(mountedProps).toBeDefined());
+
+    expect((mountedProps.stable as () => unknown)()).toBe('value');
+    expect(() => (mountedProps.failing as () => unknown)()).not.toThrow();
+    expect(consoleError).toHaveBeenCalledWith('[ReactMountDirective] host callback "failing" threw', expect.any(Error));
+
+    const firstStable = mountedProps.stable;
+    directive.reactProps = { stable, failing, label: 'next' };
+    directive.ngOnChanges({ reactProps: new SimpleChange(undefined, directive.reactProps, false) });
+    expect(update).toHaveBeenLastCalledWith(expect.objectContaining({ stable: firstStable, label: 'next' }));
+    consoleError.mockRestore();
+    directive.ngOnDestroy();
+  });
 });

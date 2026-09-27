@@ -76,3 +76,27 @@
     padding: 0 5px;
   }
 });
+
+// Briefly outline a paragraph the assistant just changed or revealed.
+zeppelin-notebook-paragraph.assistant-reveal-highlight {
+  border-radius: 4px;
+  outline: 2px solid #3071a9;
+  outline-offset: 2px;
+  animation: assistant-reveal-fade 1.5s ease-out forwards;
+}
+
+@keyframes assistant-reveal-fade {
+  0%,
+  60% {
+    outline-color: #3071a9;
+  }
+  100% {
+    outline-color: transparent;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  zeppelin-notebook-paragraph.assistant-reveal-highlight {
+    animation: none;
+  }
+}

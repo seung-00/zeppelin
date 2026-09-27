@@ -515,5 +515,17 @@ export enum OP {
    * [s-c]
    * Notice
    */
-  NOTICE = 'NOTICE'
+  NOTICE = 'NOTICE',
+
+  /**
+   * [c-s]
+   * send a message to the notebook assistant
+   */
+  ASSISTANT_SEND_MESSAGE = 'ASSISTANT_SEND_MESSAGE',
+
+  /**
+   * [s-c]
+   * assistant run stream event (see "type" field)
+   */
+  ASSISTANT_EVENT = 'ASSISTANT_EVENT'
 }

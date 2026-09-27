@@ -12,7 +12,7 @@
 
 import { act } from 'react';
 import { render, screen } from '@testing-library/react';
-import { theme as antdTheme } from 'antd';
+import { Button, theme as antdTheme } from 'antd';
 import { afterEach, describe, expect, it } from 'vitest';
 import { useHostThemeMode, ZeppelinThemeProvider } from './ZeppelinThemeProvider';
 import { HostThemeMode } from './hostTheme';
@@ -33,6 +33,21 @@ const setHostTheme = (mode: HostThemeMode) => {
 };
 
 describe('ZeppelinThemeProvider', () => {
+  it('isolates assistant controls while preserving the default prefix for other surfaces', () => {
+    render(
+      <>
+        <ZeppelinThemeProvider prefixCls="zeppelin-ai">
+          <Button>Assistant control</Button>
+        </ZeppelinThemeProvider>
+        <ZeppelinThemeProvider>
+          <Button>Existing control</Button>
+        </ZeppelinThemeProvider>
+      </>
+    );
+    expect(screen.getByRole('button', { name: 'Assistant control' }).classList.contains('zeppelin-ai-btn')).toBe(true);
+    expect(screen.getByRole('button', { name: 'Assistant control' }).classList.contains('ant-btn')).toBe(false);
+    expect(screen.getByRole('button', { name: 'Existing control' }).classList.contains('ant-btn')).toBe(true);
+  });
   afterEach(() => {
     document.documentElement.removeAttribute('data-theme');
   });

@@ -1,0 +1,221 @@
+/*
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+[zeppelin-assistant-slot='toolbar'] .assistant-workspace-toolbar-button.zeppelin-ai-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  min-width: 28px;
+  height: 28px;
+  padding: 0;
+  line-height: 20px;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.assistant-workspace-toolbar-button.zeppelin-ai-btn[aria-expanded='true'] {
+  color: var(--ant-color-primary, #1677ff);
+}
+
+.assistant-workspace-toolbar-button.zeppelin-ai-btn,
+.assistant-workspace-toolbar-button.zeppelin-ai-btn:not(:disabled):not(.zeppelin-ai-btn-disabled):hover,
+.assistant-workspace-toolbar-button.zeppelin-ai-btn:not(:disabled):not(.zeppelin-ai-btn-disabled):active,
+.assistant-workspace-navigation-button.zeppelin-ai-btn,
+.assistant-workspace-navigation-button.zeppelin-ai-btn:not(:disabled):not(.zeppelin-ai-btn-disabled):hover,
+.assistant-workspace-navigation-button.zeppelin-ai-btn:not(:disabled):not(.zeppelin-ai-btn-disabled):active {
+  background: transparent;
+  box-shadow: none;
+}
+
+.assistant-paragraph-popover {
+  max-width: calc(100vw - 24px);
+}
+
+.assistant-paragraph-popover.zeppelin-ai-popover .zeppelin-ai-popover-inner {
+  padding: 12px;
+  border-radius: 10px;
+  box-shadow: 0 3px 8px rgba(0, 0, 0, 0.16);
+}
+
+.assistant-paragraph-popover.zeppelin-ai-popover .zeppelin-ai-popover-inner-content {
+  padding: 0;
+}
+
+.assistant-paragraph-dialog {
+  width: 328px;
+  max-width: calc(100vw - 56px);
+}
+
+.assistant-paragraph-heading {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.assistant-paragraph-close.zeppelin-ai-btn {
+  margin-left: auto;
+  align-self: flex-start;
+}
+
+.assistant-workspace-toolbar-button.zeppelin-ai-btn:focus-visible,
+.assistant-workspace-navigation-button.zeppelin-ai-btn:focus-visible {
+  outline: 2px solid #3071a9;
+  outline-offset: 3px;
+}
+
+/* Keep the navigation hit area stable across themes. */
+[zeppelin-assistant-slot='navigation'] .assistant-workspace-navigation-button.zeppelin-ai-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 32px;
+  padding: 0;
+}
+
+/* Match the sidebar's active tab colour; the mark is an image, so tint its box. */
+[zeppelin-assistant-slot='navigation']
+  .assistant-workspace-navigation-button[aria-pressed='true']
+  .assistant-brand-icon {
+  background: rgba(48, 113, 169, 0.16);
+  box-shadow: inset 0 0 0 1px rgba(48, 113, 169, 0.6);
+}
+
+.assistant-workspace-navigation-button.zeppelin-ai-btn:focus:not(:focus-visible) {
+  outline: none;
+}
+
+.assistant-paragraph-heading strong {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+/* Explicit host slot: keep the entry alongside AI in the paragraph header. */
+[data-assistant-entry-row] {
+  position: absolute;
+  top: 4px;
+  left: 12px;
+  right: 212px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+}
+
+[data-assistant-entry-row] > [zeppelin-assistant-slot='toolbar'] {
+  flex: none;
+}
+
+[data-assistant-entry-row] > [zeppelin-assistant-slot='composer'] {
+  flex: 1;
+  min-width: 0;
+}
+
+[data-assistant-entry-row] .inline-assistant {
+  padding: 0;
+  border: 0;
+}
+
+[data-assistant-entry-row] .inline-assistant-label {
+  display: none;
+}
+
+[data-assistant-entry-row] .inline-assistant-composer {
+  flex-wrap: nowrap;
+  gap: 4px;
+}
+
+[data-assistant-entry-row] .inline-assistant-actions {
+  gap: 0;
+}
+
+.assistant-workspace-entry {
+  min-width: 0;
+  width: 100%;
+}
+
+.assistant-workspace-entry > .zeppelin-ai-alert {
+  margin-top: 6px;
+}
+
+.assistant-workspace-panel {
+  position: sticky;
+  z-index: 1000;
+  top: 0;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  width: 370px;
+  height: calc(100dvh - var(--assistant-panel-top, 0px));
+  min-height: 0;
+  overflow: hidden;
+  border-right: 1px solid var(--assistant-workspace-border);
+  overscroll-behavior: contain;
+}
+
+.assistant-workspace-panel-spacer {
+  flex: 0 0 370px;
+  width: 370px;
+  min-width: 370px;
+  height: 0;
+  transition:
+    flex-basis 120ms ease,
+    width 120ms ease,
+    min-width 120ms ease;
+}
+
+.assistant-workspace-panel-spacer-hidden {
+  flex-basis: 0;
+  width: 0;
+  min-width: 0;
+}
+
+.assistant-workspace-panel-hidden {
+  display: none;
+}
+
+.assistant-workspace-panel-heading {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 36px;
+  padding: 4px 8px 4px 12px;
+  border-bottom: 1px solid var(--assistant-workspace-border);
+}
+
+.assistant-workspace-panel-content {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.assistant-workspace-panel-content > .assistant-panel {
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+@media (max-width: 640px) {
+  .assistant-workspace-panel-spacer {
+    display: none;
+  }
+
+  .assistant-workspace-panel {
+    /* Keep the mobile overlay out of the notebook's horizontal layout. */
+    width: min(370px, 100vw);
+    margin-right: calc(-1 * min(370px, 100vw));
+    margin-left: -40px;
+  }
+}

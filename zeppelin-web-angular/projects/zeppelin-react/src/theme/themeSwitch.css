@@ -10,6 +10,10 @@
  * limitations under the License.
  */
 
-export * from './assistant';
-export * from './interfaces/public-api';
-export * from './message';
+/* Applied for two frames while the host theme changes, so colours switch with the
+   shell instead of easing through antd's 0.2-0.3s transitions. */
+html.zeppelin-theme-switching *,
+html.zeppelin-theme-switching *::before,
+html.zeppelin-theme-switching *::after {
+  transition: none !important;
+}

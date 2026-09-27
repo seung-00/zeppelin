@@ -70,6 +70,20 @@
         (cloneParagraph)="cloneParagraph()"
         (cancelParagraph)="cancelParagraph()"
       ></zeppelin-notebook-paragraph-control>
+      @if (!viewOnly && !revisionView && looknfeel !== 'report') {
+        <div data-assistant-entry-row>
+          <span
+            zeppelin-assistant-slot="toolbar"
+            [assistantParagraphId]="paragraph.id"
+            [assistantSlotDisabled]="isEntireNoteRunning || isParagraphRunning"
+          ></span>
+          <div
+            zeppelin-assistant-slot="composer"
+            [assistantParagraphId]="paragraph.id"
+            [assistantSlotDisabled]="isEntireNoteRunning || isParagraphRunning"
+          ></div>
+        </div>
+      }
       @if (!paragraph.config.editorHide && !viewOnly) {
         <zeppelin-notebook-paragraph-code-editor
           [text]="paragraph.text"

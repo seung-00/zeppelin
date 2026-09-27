@@ -12,6 +12,7 @@
 
 export * from './angular-drag-drop.service';
 export * from './array-ordering.service';
+export * from './assistant-storage.util';
 export * from './base-url.service';
 export * from './classic-visualization.service';
 export * from './completion.service';

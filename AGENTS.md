@@ -193,6 +193,9 @@ Each interpreter is an independent Maven module inheriting from `zeppelin-interp
 
 - `zeppelin-web-angular/` — active frontend (Angular; versions in `package.json`, Node build pin in `pom.xml` `node.version`)
 - `zeppelin-web/` — Legacy AngularJS (activated with `-Pweb-classic`)
+- URL feature flags: write links with the flag at the end of the hash route (`#/route?flag`), like the other
+  React surface flags. Read them with `readLocationFlag` in `zeppelin-web-angular/src/app/services/query-flag.util.ts`
+  (it also accepts `/?flag#/route`); do not parse `location.search`/`location.hash` directly.
 
 ### Configuration Files
 

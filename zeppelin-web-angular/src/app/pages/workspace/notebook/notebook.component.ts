@@ -40,6 +40,7 @@ import {
   WebSocketMessage
 } from '@zeppelin/sdk';
 import {
+  isAssistantStorageParagraph,
   MessageService,
   NgZService,
   NoteStatusService,
@@ -47,14 +48,18 @@ import {
   ReactFeatureService,
   SecurityService,
   ThemeService,
-  TicketService
+  TicketService,
+  withoutAssistantStorage
 } from '@zeppelin/services';
 
 import { scrollIntoViewIfNeeded } from '@zeppelin/utility';
 import { NotebookParagraphComponent } from './paragraph/paragraph.component';
+import { AssistantReveal } from './assistant/assistant-reveal';
+import { AssistantSlots } from './assistant/assistant-slots';
 
 @Component({
   selector: 'zeppelin-notebook',
+  providers: [AssistantSlots, AssistantReveal],
   templateUrl: './notebook.component.html',
   styleUrls: ['./notebook.component.less'],
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -91,7 +96,7 @@ export class NotebookComponent extends MessageListenersManager implements OnInit
       this.router.navigate(['/']).then();
     } else {
       this.removeParagraphFromNgZ();
-      this.note = note;
+      this.note = withoutAssistantStorage(note);
       const { paragraphId } = this.activatedRoute.snapshot.params;
       if (paragraphId) {
         this.note = this.cleanParagraphExcept(this.note, paragraphId);
@@ -163,7 +168,7 @@ export class NotebookComponent extends MessageListenersManager implements OnInit
     }
 
     const data = message.data;
-    if (data === undefined) {
+    if (data === undefined || isAssistantStorageParagraph(data.paragraph)) {
       return;
     }
 
@@ -203,7 +208,7 @@ export class NotebookComponent extends MessageListenersManager implements OnInit
     if (isNil(note)) {
       this.router.navigate(['/']).then();
     } else {
-      this.note = note;
+      this.note = withoutAssistantStorage(note);
       this.initializeLookAndFeel(this.note);
       this.cdr.markForCheck();
     }

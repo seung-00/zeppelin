@@ -14,7 +14,8 @@ import { Component, OnInit } from '@angular/core';
 import { NavigationEnd, NavigationStart, Router } from '@angular/router';
 import { filter, map } from 'rxjs/operators';
 
-import { ThemeService, TicketService } from '@zeppelin/services';
+import { ReactFeatureService, ThemeService, TicketService } from '@zeppelin/services';
+import { ReactRemoteLoaderService } from './share/react-mount/react-remote-loader.service';
 
 @Component({
   selector: 'zeppelin-root',
@@ -39,10 +40,17 @@ export class AppComponent implements OnInit {
   constructor(
     private router: Router,
     private ticketService: TicketService,
-    private themeService: ThemeService
+    private themeService: ThemeService,
+    private reactFeature: ReactFeatureService,
+    private reactLoader: ReactRemoteLoaderService
   ) {}
 
   ngOnInit(): void {
+    if (this.reactFeature.isEnabled('assistantPanel')) {
+      // Overlap the opt-in assistant download with initial routing/notebook data.
+      // A speculative failure must not block the app; the mount retries normally.
+      void this.reactLoader.loadModule('./AssistantWorkspace').catch(() => undefined);
+    }
     this.themeService.updateMonacoTheme();
   }
 }

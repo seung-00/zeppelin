@@ -56,8 +56,11 @@ public class AssistantConversationRestApi extends AbstractRestApi {
   @GET
   @ZeppelinApi
   public Response list(@PathParam("noteId") String noteId) throws IOException {
-    return new JsonResponse<>(Response.Status.OK, "",
-        assistantService.listConversations(noteId, getServiceContext())).build();
+    return new JsonResponse<>(
+        Response.Status.OK,
+        "",
+        assistantService.listConversations(noteId, getServiceContext())
+    ).build();
   }
 
   @GET
@@ -87,9 +90,10 @@ public class AssistantConversationRestApi extends AbstractRestApi {
   @DELETE
   @Path("/{conversationId}")
   @ZeppelinApi
-  public Response delete(@PathParam("noteId") String noteId,
-                         @PathParam("conversationId") String conversationId)
-      throws IOException {
+  public Response delete(
+      @PathParam("noteId") String noteId,
+      @PathParam("conversationId") String conversationId
+  ) throws IOException {
     assistantService.deleteConversation(noteId, conversationId, getServiceContext());
     return Response.noContent().build();
   }

@@ -19,25 +19,25 @@ package org.apache.zeppelin.rest;
 
 import jakarta.inject.Inject;
 import jakarta.inject.Singleton;
-import jakarta.ws.rs.BadRequestException;
+import jakarta.ws.rs.DefaultValue;
 import jakarta.ws.rs.GET;
-import jakarta.ws.rs.POST;
 import jakarta.ws.rs.Path;
 import jakarta.ws.rs.PathParam;
 import jakarta.ws.rs.Produces;
+import jakarta.ws.rs.QueryParam;
 import jakarta.ws.rs.core.Response;
-import jakarta.ws.rs.core.StreamingOutput;
 
 import java.io.IOException;
-import java.util.Optional;
 
 import org.apache.zeppelin.annotation.ZeppelinApi;
-import org.apache.zeppelin.rest.message.SendMessageRequest;
 import org.apache.zeppelin.server.JsonResponse;
 import org.apache.zeppelin.service.AuthenticationService;
-import org.apache.zeppelin.service.ServiceContext;
 import org.apache.zeppelin.service.assistant.NotebookAssistantService;
 
+/**
+ * Reads conversation messages. Sending a message and streaming the assistant's reply
+ * runs over the WebSocket ({@code ASSISTANT_SEND_MESSAGE}), not REST.
+ */
 @Path("/notes/{noteId}/conversations/{conversationId}/messages")
 @Produces("application/json")
 @Singleton
@@ -46,33 +46,28 @@ public class AssistantMessageRestApi extends AbstractRestApi {
   private final NotebookAssistantService assistantService;
 
   @Inject
-  public AssistantMessageRestApi(AuthenticationService authenticationService,
-                                 NotebookAssistantService assistantService) {
+  public AssistantMessageRestApi(
+      AuthenticationService authenticationService,
+      NotebookAssistantService assistantService
+  ) {
     super(authenticationService);
     this.assistantService = assistantService;
   }
 
   @GET
   @ZeppelinApi
-  public Response list(@PathParam("noteId") String noteId,
-                       @PathParam("conversationId") String conversationId) throws IOException {
-    return new JsonResponse<>(Response.Status.OK, "",
-        assistantService.getMessages(noteId, conversationId, getServiceContext())).build();
-  }
-
-  @POST
-  @Produces("text/event-stream")
-  @ZeppelinApi
-  public Response send(@PathParam("noteId") String noteId,
-                       @PathParam("conversationId") String conversationId,
-                       String body) throws IOException {
-
-    String content = Optional.ofNullable(GSON.fromJson(body, SendMessageRequest.class))
-        .map(SendMessageRequest::getContent)
-        .orElseThrow(BadRequestException::new);
-    ServiceContext ctx = getServiceContext();
-    assistantService.validateMessage(noteId, conversationId, content, ctx);
-    StreamingOutput stream = out -> assistantService.sendMessage(noteId, conversationId, content, ctx, out);
-    return Response.ok(stream).type("text/event-stream").build();
+  public Response list(
+      @PathParam("noteId") String noteId,
+      @PathParam("conversationId") String conversationId,
+      @QueryParam("cursor") String cursor,
+      @QueryParam("limit") @DefaultValue("10") int limit
+  ) throws IOException {
+    return new JsonResponse<>(
+        Response.Status.OK,
+        "",
+        assistantService.listMessages(
+            noteId, conversationId, cursor, limit, getServiceContext()
+        )
+    ).build();
   }
 }

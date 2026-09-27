@@ -17,52 +17,71 @@
 
 package org.apache.zeppelin.service.assistant;
 
+import com.google.gson.Gson;
+
 import org.jvnet.hk2.annotations.Service;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import java.io.IOException;
-import java.io.OutputStream;
+import java.time.Instant;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import jakarta.inject.Inject;
-import jakarta.ws.rs.BadRequestException;
 import jakarta.ws.rs.ForbiddenException;
 import jakarta.ws.rs.NotFoundException;
 import jakarta.ws.rs.ServiceUnavailableException;
-import jakarta.ws.rs.WebApplicationException;
 import org.apache.zeppelin.conf.ZeppelinConfiguration;
 import org.apache.zeppelin.notebook.AuthorizationService;
 import org.apache.zeppelin.notebook.Notebook;
 import org.apache.zeppelin.rest.exception.NoteNotFoundException;
+import org.apache.zeppelin.service.NotebookService;
 import org.apache.zeppelin.service.ServiceContext;
 import org.apache.zeppelin.user.AuthenticationInfo;
 
 @Service
 public class NotebookAssistantService {
 
+  private static final Logger LOGGER = LoggerFactory.getLogger(NotebookAssistantService.class);
+  private static final Gson GSON = new Gson();
+
+  private static final String INSTRUCTIONS =
+      "You are an AI assistant integrated into Apache Zeppelin, a web-based notebook.\n"
+          + "You are talking within the context of a single notebook.\n"
+          + "Answer the user's questions concisely and clearly.";
+
   private final AuthorizationService authorizationService;
 
   private final Map<String, Object> noteLocks = new ConcurrentHashMap<>();
 
-  private final Set<String> activeConversations = ConcurrentHashMap.newKeySet();
   private final ZeppelinConfiguration zConf;
   private final Notebook notebook;
-  private final OpenAiClient openAiClient;
-  private final ParagraphToolExecutor toolExecutor;
+  private final ChatModel modelClient;
+  private final ToolExecutor toolExecutor;
 
   @Inject
-  public NotebookAssistantService(ZeppelinConfiguration zConf,
-                                  Notebook notebook,
-                                  OpenAiClient openAiClient,
-                                  ParagraphToolExecutor toolExecutor,
-                                  AuthorizationService authorizationService) {
+  public NotebookAssistantService(
+      ZeppelinConfiguration zConf,
+      Notebook notebook,
+      ChatModel modelClient,
+      NotebookService notebookService,
+      AuthorizationService authorizationService
+  ) {
     this.authorizationService = authorizationService;
     this.zConf = zConf;
     this.notebook = notebook;
-    this.openAiClient = openAiClient;
-    this.toolExecutor = toolExecutor;
+    this.modelClient = modelClient;
+    this.toolExecutor = new ToolExecutor(
+        List.of(
+            new ListParagraphsTool(notebookService)
+        )
+    );
   }
 
   private Object lockFor(String noteId) {
@@ -70,21 +89,29 @@ public class NotebookAssistantService {
   }
 
   private void ensureAvailable() {
-    if (!zConf.isNotebookAssistantEnabled() || zConf.getNotebookAssistantApiKey() == null
-        || zConf.getNotebookAssistantApiKey().isBlank()) {
+    if (
+        !zConf.isNotebookAssistantEnabled() ||
+            zConf.getNotebookAssistantApiKey() == null ||
+            zConf.getNotebookAssistantApiKey().isBlank()
+    ) {
       throw new ServiceUnavailableException("Notebook Assistant is not configured");
     }
   }
 
-  public List<Conversation> listConversations(String noteId, ServiceContext ctx)
-      throws IOException {
+  public List<Conversation> listConversations(
+      String noteId,
+      ServiceContext ctx
+  ) throws IOException {
     ensureAvailable();
     checkPermission(noteId, ctx, false);
     return readStore(noteId, ctx.getAutheInfo(), ConversationStore::findAll);
   }
 
-  public Conversation createConversation(String noteId, String title, ServiceContext ctx)
-      throws IOException {
+  public Conversation createConversation(
+      String noteId,
+      String title,
+      ServiceContext ctx
+  ) throws IOException {
     ensureAvailable();
     checkPermission(noteId, ctx, true);
     var conversation = Conversation.create(noteId, title);
@@ -94,21 +121,24 @@ public class NotebookAssistantService {
     return conversation;
   }
 
-  public Conversation getConversation(String noteId, String conversationId, ServiceContext ctx)
-      throws IOException {
+  public Conversation getConversation(
+      String noteId,
+      String conversationId,
+      ServiceContext ctx
+  ) throws IOException {
     ensureAvailable();
     checkPermission(noteId, ctx, false);
     return readStore(noteId, ctx.getAutheInfo(), store -> store.find(conversationId))
         .orElseThrow(NotFoundException::new);
   }
 
-  public void deleteConversation(String noteId, String conversationId, ServiceContext ctx)
-      throws IOException {
+  public void deleteConversation(
+      String noteId,
+      String conversationId,
+      ServiceContext ctx
+  ) throws IOException {
     ensureAvailable();
     checkPermission(noteId, ctx, true);
-    if (activeConversations.contains(conversationId)) {
-      throw new WebApplicationException("Conversation is running", 409);
-    }
     synchronized (lockFor(noteId)) {
       mutateStore(noteId, ctx.getAutheInfo(), store -> {
         if (!store.remove(conversationId)) {
@@ -118,13 +148,41 @@ public class NotebookAssistantService {
     }
   }
 
-  public List<Message> getMessages(String noteId, String conversationId, ServiceContext ctx)
-      throws IOException {
-    return getConversation(noteId, conversationId, ctx).getMessages();
+  public Messages listMessages(
+      String noteId,
+      String conversationId,
+      String cursor,
+      int limit,
+      ServiceContext ctx
+  ) throws IOException {
+    List<Message> all = getConversation(noteId, conversationId, ctx).getMessages();
+
+    int cursorIdx = -1;
+    if (cursor != null) {
+      for (int i = 0; i < all.size(); i++) {
+        if (all.get(i).getId().equals(cursor)) {
+          cursorIdx = i;
+          break;
+        }
+      }
+      if (cursorIdx == -1) {
+        throw new NotFoundException("Message not found: " + cursor);
+      }
+    }
+
+    int endExclusive = (cursor == null) ? all.size() : cursorIdx;
+    int start = Math.max(0, endExclusive - limit);
+    List<Message> page = new ArrayList<>(all.subList(start, endExclusive));
+    Collections.reverse(page);
+    String next = (start > 0) ? all.get(start).getId() : null;
+    return new Messages(page, next);
   }
 
-  private <T> T readStore(String noteId, AuthenticationInfo subject,
-                          Function<ConversationStore, T> mapper) throws IOException {
+  private <T> T readStore(
+      String noteId,
+      AuthenticationInfo subject,
+      Function<ConversationStore, T> mapper
+  ) throws IOException {
     return notebook.processNote(noteId, note -> {
       if (note == null) {
         throw new NoteNotFoundException(noteId);
@@ -133,21 +191,28 @@ public class NotebookAssistantService {
     });
   }
 
-  private void mutateStore(String noteId, AuthenticationInfo subject,
-                           Consumer<ConversationStore> action) throws IOException {
+  private void mutateStore(
+      String noteId,
+      AuthenticationInfo subject,
+      Consumer<ConversationStore> consumer
+  ) throws IOException {
     notebook.processNote(noteId, note -> {
       if (note == null) {
         throw new NoteNotFoundException(noteId);
       }
       ConversationStore store = ConversationStore.attach(note, subject);
-      action.accept(store);
+      consumer.accept(store);
       store.flush();
       notebook.saveNote(note, subject);
       return null;
     });
   }
 
-  private void checkPermission(String noteId, ServiceContext ctx, boolean write) {
+  private void checkPermission(
+      String noteId,
+      ServiceContext ctx,
+      boolean write
+  ) {
     boolean allowed = write
         ? authorizationService.isWriter(noteId, ctx.getUserAndRoles())
         : authorizationService.isReader(noteId, ctx.getUserAndRoles());
@@ -156,24 +221,137 @@ public class NotebookAssistantService {
     }
   }
 
-  // --- Message send (SSE streaming) ---
+  public void sendMessage(
+      String noteId,
+      String conversationId,
+      String userContent,
+      ServiceContext ctx,
+      AssistantEventListener sink
+  ) {
+    var runId = "run_" + UUID.randomUUID().toString().replace("-", "").substring(0, 16);
+    try {
+      ensureAvailable();
+      checkPermission(noteId, ctx, true);
 
-  public void validateMessage(String noteId, String conversationId, String content,
-                              ServiceContext ctx) throws IOException {
-    ensureAvailable();
-    checkPermission(noteId, ctx, true);
-    if (content == null || content.isBlank()) {
-      throw new BadRequestException("content must be a nonempty string");
-    }
-    getConversation(noteId, conversationId, ctx);
-    if (activeConversations.contains(conversationId)) {
-      throw new WebApplicationException("Conversation is running", 409);
+      var conversation = getConversation(noteId, conversationId, ctx);
+      conversation.addMessage(Message.user(Message.id(), userContent));
+      persistConversation(noteId, conversation, ctx.getAutheInfo());
+
+      sink.onEvent(
+          AssistantEventType.RUN_STARTED,
+          new AssistantEventPayload.RunStarted(runId, Instant.now().toString())
+      );
+
+      Map<String, Integer> tokens = new HashMap<>();
+      tokens.put("input", 0);
+      tokens.put("output", 0);
+
+      runLoop(noteId, conversation, ctx, sink, tokens);
+
+      sink.onEvent(
+          AssistantEventType.RUN_COMPLETED,
+          new AssistantEventPayload.RunCompleted(
+              runId,
+              new AssistantEventPayload.Usage(tokens.get("input"), tokens.get("output"))
+          )
+      );
+    } catch (Exception e) {
+      LOGGER.error("Error during Notebook Assistant run", e);
+      sink.onEvent(
+          AssistantEventType.RUN_FAILED,
+          new AssistantEventPayload.RunFailed(
+              runId,
+              new AssistantEventPayload.Error("internal_error", String.valueOf(e.getMessage()))
+          )
+      );
     }
   }
 
-  public void sendMessage(String noteId, String conversationId, String userContent,
-                          ServiceContext ctx,
-                          OutputStream sseOut) {
-    throw new UnsupportedOperationException("sendMessage not yet implemented");
+  private void runLoop(
+      String noteId,
+      Conversation conversation,
+      ServiceContext ctx,
+      AssistantEventListener sink,
+      Map<String, Integer> tokens
+  ) throws IOException {
+    for (int iteration = 0; iteration < 10; iteration++) {
+      String assistantId = Message.id();
+      var textBuffer = new StringBuilder();
+      List<ToolCall> toolCalls = new ArrayList<>();
+
+      modelClient.stream(
+          INSTRUCTIONS,
+          conversation.getMessages(),
+          toolExecutor.specs(),
+          event -> {
+            if (event instanceof AssistantEvent.TextDelta) {
+              String delta = ((AssistantEvent.TextDelta) event).delta;
+              textBuffer.append(delta);
+              sink.onEvent(
+                  AssistantEventType.MESSAGE_DELTA,
+                  new AssistantEventPayload.MessageDelta(assistantId, delta)
+              );
+            } else if (event instanceof AssistantEvent.ToolCall) {
+              AssistantEvent.ToolCall tc = (AssistantEvent.ToolCall) event;
+              @SuppressWarnings("unchecked")
+              Map<String, Object> argsMap = tc.arguments == null || tc.arguments.isBlank()
+                  ? new HashMap<>() : GSON.fromJson(tc.arguments, Map.class);
+              toolCalls.add(new ToolCall(tc.id, tc.name, argsMap));
+            } else if (event instanceof AssistantEvent.Usage) {
+              AssistantEvent.Usage u = (AssistantEvent.Usage) event;
+              tokens.put("input", tokens.get("input") + u.inputTokens);
+              tokens.put("output", tokens.get("output") + u.outputTokens);
+            }
+          }
+      );
+
+      if (!toolCalls.isEmpty()) {
+        Message.Assistant assistantMsg = Message.assistant(assistantId, textBuffer.toString());
+        for (ToolCall tc : toolCalls) {
+          assistantMsg.addToolCall(tc);
+        }
+        conversation.addMessage(assistantMsg);
+
+        for (ToolCall tc : assistantMsg.getToolCalls()) {
+          sink.onEvent(
+              AssistantEventType.TOOL_CALL_STARTED,
+              new AssistantEventPayload.ToolCallStarted(tc.getId(), tc.getName(), tc.getArguments())
+          );
+          ToolResult result = toolExecutor.callTool(noteId, tc.getName(), tc.getArguments(), ctx);
+          tc.setResult(result);
+          conversation.addMessage(Message.tool(Message.id(), tc.getId(), GSON.toJson(result)));
+          persistConversation(noteId, conversation, ctx.getAutheInfo());
+          sink.onEvent(
+              AssistantEventType.TOOL_CALL_DONE,
+              new AssistantEventPayload.ToolCallDone(tc.getId(), result)
+          );
+        }
+      } else {
+        String assistantText = textBuffer.toString();
+        conversation.addMessage(Message.assistant(assistantId, assistantText));
+        persistConversation(noteId, conversation, ctx.getAutheInfo());
+        sink.onEvent(
+            AssistantEventType.MESSAGE_DONE,
+            new AssistantEventPayload.MessageDone(assistantId, assistantText)
+        );
+        return;
+      }
+    }
+    throw new IllegalStateException("Tool iteration limit exceeded");
+  }
+
+  private void persistConversation(
+      String noteId,
+      Conversation conversation,
+      AuthenticationInfo subject
+  ) throws IOException {
+    synchronized (lockFor(noteId)) {
+      mutateStore(noteId, subject, store -> {
+        if (!store.contains(conversation.getId())) {
+          throw new NotFoundException("Conversation not found: " + conversation.getId());
+        }
+        store.replace(conversation);
+      });
+    }
   }
 }

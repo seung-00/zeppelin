@@ -17,27 +17,15 @@
 
 package org.apache.zeppelin.service.assistant;
 
-import java.util.Map;
+import java.util.List;
+import java.util.function.Consumer;
 
-public class ToolCall {
+public interface ChatModel {
 
-  private String id;
-  private String name;
-  private Map<String, Object> arguments;
-  private ToolResult result;
-
-  ToolCall() {}
-
-  public ToolCall(String id, String name, Map<String, Object> arguments) {
-    this.id = id;
-    this.name = name;
-    this.arguments = arguments;
-  }
-
-  public String getId() { return id; }
-  public String getName() { return name; }
-  public Map<String, Object> getArguments() { return arguments; }
-  public ToolResult getResult() { return result; }
-
-  public void setResult(ToolResult result) { this.result = result; }
+  void stream(
+      String systemPrompt,
+      List<Message> history,
+      List<ToolSpec> tools,
+      Consumer<AssistantEvent> consumer
+  );
 }

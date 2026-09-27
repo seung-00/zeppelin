@@ -82,6 +82,21 @@ final class ConversationStore {
     return conversations.removeIf(c -> c.getId().equals(conversationId));
   }
 
+  boolean contains(String conversationId) {
+    return find(conversationId).isPresent();
+  }
+
+  /** Replace the conversation whose id matches {@code conversation}. Caller must ensure it exists. */
+  void replace(Conversation conversation) {
+    for (int i = 0; i < conversations.size(); i++) {
+      if (conversations.get(i).getId().equals(conversation.getId())) {
+        conversations.set(i, conversation);
+        return;
+      }
+    }
+    throw new IllegalStateException("Conversation not found: " + conversation.getId());
+  }
+
   void flush() {
     paragraph.setText(ConversationJsonCodec.serialize(conversations));
   }

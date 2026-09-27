@@ -17,27 +17,18 @@
 
 package org.apache.zeppelin.service.assistant;
 
-import java.util.Map;
+public enum AssistantEventType {
+  RUN_STARTED("run.started"),
+  RUN_COMPLETED("run.completed"),
+  RUN_FAILED("run.failed"),
+  MESSAGE_DELTA("message.delta"),
+  MESSAGE_DONE("message.done"),
+  TOOL_CALL_STARTED("tool_call.started"),
+  TOOL_CALL_DONE("tool_call.done");
 
-public class ToolCall {
+  public final String wireName;
 
-  private String id;
-  private String name;
-  private Map<String, Object> arguments;
-  private ToolResult result;
-
-  ToolCall() {}
-
-  public ToolCall(String id, String name, Map<String, Object> arguments) {
-    this.id = id;
-    this.name = name;
-    this.arguments = arguments;
+  AssistantEventType(String wireName) {
+    this.wireName = wireName;
   }
-
-  public String getId() { return id; }
-  public String getName() { return name; }
-  public Map<String, Object> getArguments() { return arguments; }
-  public ToolResult getResult() { return result; }
-
-  public void setResult(ToolResult result) { this.result = result; }
 }

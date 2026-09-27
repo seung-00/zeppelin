@@ -21,6 +21,7 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import org.apache.zeppelin.conf.ZeppelinConfiguration;
@@ -29,18 +30,16 @@ import org.apache.zeppelin.notebook.Note;
 import org.apache.zeppelin.notebook.Notebook;
 import org.apache.zeppelin.notebook.Notebook.NoteProcessor;
 import org.apache.zeppelin.notebook.Paragraph;
-import org.apache.zeppelin.rest.exception.ForbiddenException;
-import org.apache.zeppelin.rest.exception.ParagraphNotFoundException;
 import org.apache.zeppelin.service.NotebookService;
 import org.apache.zeppelin.service.ServiceContext;
 import org.apache.zeppelin.user.AuthenticationInfo;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
-class ParagraphToolExecutorTest {
+class ToolExecutorTest {
   private Note note;
   private AuthorizationService authorization;
-  private ParagraphToolExecutor tools;
+  private ToolExecutor executor;
   private final ServiceContext ctx = new ServiceContext(AuthenticationInfo.ANONYMOUS, Set.of("user"));
 
   @BeforeEach
@@ -55,43 +54,44 @@ class ParagraphToolExecutorTest {
     authorization = mock(AuthorizationService.class);
     when(authorization.isReader(anyString(), anySet())).thenReturn(true);
     when(authorization.isWriter(anyString(), anySet())).thenReturn(true);
-    tools = new ParagraphToolExecutor(new NotebookService(notebook, authorization,
-        mock(ZeppelinConfiguration.class), null));
+    NotebookService notebookService = new NotebookService(notebook, authorization,
+        mock(ZeppelinConfiguration.class), null);
+    executor = new ToolExecutor(List.of(new ListParagraphsTool(notebookService)));
   }
 
   @Test
-  void rejectsAllToolsWithoutReadPermission() {
+  void specsExposeRegisteredTools() {
+    List<ToolSpec> specs = executor.specs();
+    assertEquals(1, specs.size());
+    assertEquals("list_paragraphs", specs.get(0).name);
+  }
+
+  @Test
+  void unknownToolReturnsError() {
+    ToolResult result = executor.callTool("note", "unknown_tool", Map.of(), ctx);
+    assertNotNull(result.error);
+  }
+
+  @Test
+  void listParagraphsExcludesAssistantMarker() {
+    Paragraph visible = note.addNewParagraph(AuthenticationInfo.ANONYMOUS);
+    visible.setText("%md hello");
+    Paragraph marker = note.addNewParagraph(AuthenticationInfo.ANONYMOUS);
+    marker.setConfig(Map.of("notebookAssistant", true));
+
+    ToolResult result = executor.callTool("note", "list_paragraphs", Map.of(), ctx);
+
+    assertNull(result.error);
+    @SuppressWarnings("unchecked")
+    List<Map<String, Object>> paragraphs = (List<Map<String, Object>>) result.value;
+    assertEquals(1, paragraphs.size());
+    assertEquals(visible.getId(), paragraphs.get(0).get("id"));
+  }
+
+  @Test
+  void listParagraphsFailsWithoutReadPermission() {
     when(authorization.isReader(anyString(), anySet())).thenReturn(false);
-    for (String tool : new String[] {"list_paragraphs", "get_paragraph", "add_paragraph",
-        "update_paragraph", "delete_paragraph"}) {
-      assertThrows(ForbiddenException.class, () -> tools.callTool("note", tool, Map.of(), ctx));
-    }
-  }
-
-  @Test
-  void readerCannotModifyParagraphs() {
-    Paragraph p = note.addNewParagraph(AuthenticationInfo.ANONYMOUS);
-    p.setText("original");
-    when(authorization.isWriter(anyString(), anySet())).thenReturn(false);
-    assertThrows(ForbiddenException.class, () -> tools.callTool("note", "update_paragraph",
-        Map.of("paragraph_id", p.getId(), "text", "changed"), ctx));
-    assertThrows(ForbiddenException.class, () -> tools.callTool("note", "delete_paragraph",
-        Map.of("paragraph_id", p.getId()), ctx));
-    assertThrows(ForbiddenException.class, () -> tools.callTool("note", "add_paragraph",
-        Map.of("text", "%md new"), ctx));
-    assertEquals("original", p.getText());
-    assertEquals(1, note.getParagraphCount());
-  }
-
-  @Test
-  void protectsAssistantMarkerParagraph() throws Exception {
-    Paragraph p = note.addNewParagraph(AuthenticationInfo.ANONYMOUS);
-    p.setConfig(Map.of("notebookAssistant", true));
-    for (String tool : new String[] {"get_paragraph", "update_paragraph", "delete_paragraph"}) {
-      assertThrows(ParagraphNotFoundException.class,
-          () -> tools.callTool("note", tool, Map.of("paragraph_id", p.getId()), ctx));
-    }
-    assertEquals(java.util.List.of(), tools.callTool("note", "list_paragraphs", Map.of(), ctx));
-    assertEquals(1, note.getParagraphCount());
+    ToolResult result = executor.callTool("note", "list_paragraphs", Map.of(), ctx);
+    assertNotNull(result.error);
   }
 }

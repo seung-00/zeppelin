@@ -17,27 +17,12 @@
 
 package org.apache.zeppelin.service.assistant;
 
-import java.util.Map;
+public final class ToolResult {
+  public final Object value;
+  public final String error;
 
-public class ToolCall {
-
-  private String id;
-  private String name;
-  private Map<String, Object> arguments;
-  private ToolResult result;
-
-  ToolCall() {}
-
-  public ToolCall(String id, String name, Map<String, Object> arguments) {
-    this.id = id;
-    this.name = name;
-    this.arguments = arguments;
+  public ToolResult(Object value, String error) {
+    this.value = value;
+    this.error = error;
   }
-
-  public String getId() { return id; }
-  public String getName() { return name; }
-  public Map<String, Object> getArguments() { return arguments; }
-  public ToolResult getResult() { return result; }
-
-  public void setResult(ToolResult result) { this.result = result; }
 }

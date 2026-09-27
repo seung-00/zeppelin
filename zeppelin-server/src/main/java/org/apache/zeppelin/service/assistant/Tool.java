@@ -17,27 +17,18 @@
 
 package org.apache.zeppelin.service.assistant;
 
+import java.io.IOException;
 import java.util.Map;
+import org.apache.zeppelin.service.ServiceContext;
 
-public class ToolCall {
+public interface Tool {
 
-  private String id;
-  private String name;
-  private Map<String, Object> arguments;
-  private ToolResult result;
+  String name();
 
-  ToolCall() {}
+  String description();
 
-  public ToolCall(String id, String name, Map<String, Object> arguments) {
-    this.id = id;
-    this.name = name;
-    this.arguments = arguments;
-  }
+  /** JSON Schema of the tool's arguments. */
+  Map<String, Object> parameters();
 
-  public String getId() { return id; }
-  public String getName() { return name; }
-  public Map<String, Object> getArguments() { return arguments; }
-  public ToolResult getResult() { return result; }
-
-  public void setResult(ToolResult result) { this.result = result; }
+  Object call(String noteId, Map<String, Object> args, ServiceContext ctx) throws IOException;
 }

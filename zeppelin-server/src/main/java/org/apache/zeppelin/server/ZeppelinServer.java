@@ -92,6 +92,7 @@ import org.apache.zeppelin.search.LuceneSearch;
 import org.apache.zeppelin.search.NoSearchService;
 import org.apache.zeppelin.search.SearchService;
 import org.apache.zeppelin.service.*;
+import org.apache.zeppelin.service.assistant.ChatModel;
 import org.apache.zeppelin.service.assistant.NotebookAssistantService;
 import org.apache.zeppelin.service.AuthenticationService;
 import org.apache.zeppelin.service.auth.AuthenticationServiceFactory;
@@ -199,8 +200,9 @@ public class ZeppelinServer implements AutoCloseable {
             bindAsContract(ConfigurationService.class).in(Singleton.class);
             bindAsContract(NotebookService.class).in(Singleton.class);
             bindAsContract(NotebookAssistantService.class).in(Singleton.class);
-            bindAsContract(org.apache.zeppelin.service.assistant.OpenAiClient.class).in(Singleton.class);
-            bindAsContract(org.apache.zeppelin.service.assistant.ParagraphToolExecutor.class).in(Singleton.class);
+            bind(org.apache.zeppelin.service.assistant.OpenAiChatModel.class)
+                .to(ChatModel.class)
+                .in(Singleton.class);
             bindAsContract(JobManagerService.class).in(Singleton.class);
             bindAsContract(Notebook.class).in(Singleton.class);
             bindAsContract(NotebookServer.class)

@@ -27,87 +27,105 @@ import java.util.UUID;
 public abstract class Message {
 
   public enum Role {
-    @SerializedName("system")    SYSTEM,
-    @SerializedName("user")      USER,
+    @SerializedName("system") SYSTEM,
+    @SerializedName("user") USER,
     @SerializedName("assistant") ASSISTANT,
-    @SerializedName("tool")      TOOL;
+    @SerializedName("tool") TOOL;
 
     public static Role fromValue(String value) {
       for (Role r : values()) {
-        if (r.name().equalsIgnoreCase(value)) return r;
+        if (r.name().equalsIgnoreCase(value)) {
+          return r;
+        }
       }
       throw new IllegalArgumentException("Unknown role: " + value);
     }
   }
 
   private String id;
-  @SerializedName(value = "created_at", alternate = "createdAt")
   private String createdAt;
 
-  protected Message() {}
+  protected Message() {
+  }
 
   Message(String id, String createdAt) {
     this.id = id;
     this.createdAt = createdAt;
   }
 
-  public String getId() { return id; }
-  public String getCreatedAt() { return createdAt; }
+  public String getId() {
+    return id;
+  }
+
+  public String getCreatedAt() {
+    return createdAt;
+  }
+
   public abstract Role getRole();
 
-  public static Message.User user(String content) {
-    return new Message.User(newId(), content, now());
-  }
-
-  public static Message.Assistant assistant(String content) {
-    return new Message.Assistant(newId(), content, now());
-  }
-
-  public static Message.Tool tool(String toolCallId, String content) {
-    return new Message.Tool(newId(), toolCallId, content, now());
-  }
-
-  private static String newId() {
+  public static String id() {
     return "msg_" + UUID.randomUUID().toString().replace("-", "").substring(0, 16);
   }
 
-  private static String now() {
-    return Instant.now().toString();
+  public static Message.User user(String id, String content) {
+    return new Message.User(id, content, Instant.now().toString());
+  }
+
+  public static Message.Assistant assistant(String id, String content) {
+    return new Message.Assistant(id, content, Instant.now().toString());
+  }
+
+  public static Message.Tool tool(String id, String toolCallId, String content) {
+    return new Message.Tool(id, toolCallId, content, Instant.now().toString());
   }
 
   public static class User extends Message {
     private Role role = Role.USER;
     private String content;
 
-    protected User() {}
+    protected User() {
+    }
 
     User(String id, String content, String createdAt) {
       super(id, createdAt);
       this.content = content;
     }
 
-    @Override public Role getRole() { return role; }
-    public String getContent() { return content; }
+    @Override
+    public Role getRole() {
+      return role;
+    }
+
+    public String getContent() {
+      return content;
+    }
   }
 
   public static class Assistant extends Message {
     private Role role = Role.ASSISTANT;
     private String content;
-    @SerializedName(value = "tool_calls", alternate = "toolCalls")
     private List<ToolCall> toolCalls = new ArrayList<>();
 
-    protected Assistant() {}
+    protected Assistant() {
+    }
 
     Assistant(String id, String content, String createdAt) {
       super(id, createdAt);
       this.content = content;
     }
 
-    @Override public Role getRole() { return role; }
-    public String getContent() { return content; }
-    public List<ToolCall> getToolCalls() { return toolCalls; }
+    @Override
+    public Role getRole() {
+      return role;
+    }
 
-    public void setContent(String content) { this.content = content; }
+    public String getContent() {
+      return content;
+    }
+
+    public List<ToolCall> getToolCalls() {
+      return toolCalls;
+    }
 
     public void addToolCall(ToolCall toolCall) {
       toolCalls.add(toolCall);
@@ -116,11 +134,11 @@ public abstract class Message {
 
   public static class Tool extends Message {
     private Role role = Role.TOOL;
-    @SerializedName(value = "tool_call_id", alternate = "toolCallId")
     private String toolCallId;
     private String content;
 
-    protected Tool() {}
+    protected Tool() {
+    }
 
     Tool(String id, String toolCallId, String content, String createdAt) {
       super(id, createdAt);
@@ -128,8 +146,17 @@ public abstract class Message {
       this.content = content;
     }
 
-    @Override public Role getRole() { return role; }
-    public String getToolCallId() { return toolCallId; }
-    public String getContent() { return content; }
+    @Override
+    public Role getRole() {
+      return role;
+    }
+
+    public String getToolCallId() {
+      return toolCallId;
+    }
+
+    public String getContent() {
+      return content;
+    }
   }
 }

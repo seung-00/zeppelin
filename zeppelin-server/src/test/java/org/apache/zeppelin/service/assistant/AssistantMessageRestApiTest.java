@@ -18,15 +18,11 @@
 package org.apache.zeppelin.service.assistant;
 
 import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 import java.util.Set;
-import jakarta.ws.rs.ForbiddenException;
-import jakarta.ws.rs.ServiceUnavailableException;
 import org.apache.zeppelin.conf.ZeppelinConfiguration;
 import org.apache.zeppelin.rest.AssistantMessageRestApi;
-import org.apache.zeppelin.rest.exception.NoteNotFoundException;
 import org.apache.zeppelin.service.AuthenticationService;
 import org.apache.zeppelin.service.ConfigurationService;
 import org.apache.zeppelin.service.SimpleServiceCallback;
@@ -44,33 +40,6 @@ class AssistantMessageRestApiTest {
     when(auth.getAssociatedRoles()).thenReturn(Set.of());
     service = mock(NotebookAssistantService.class);
     api = new AssistantMessageRestApi(auth, service);
-  }
-
-  @Test
-  void rejectsMalformedBody() {
-    assertThrows(com.google.gson.JsonSyntaxException.class,
-        () -> api.send("note", "conv", "{broken"));
-    verifyNoInteractions(service);
-  }
-
-  @Test
-  void propagatesServiceValidationErrors() throws Exception {
-    doThrow(new ServiceUnavailableException("off")).when(service)
-        .validateMessage(anyString(), anyString(), anyString(), any());
-    assertThrows(ServiceUnavailableException.class,
-        () -> api.send("note", "conv", "{\"content\":\"hello\"}"));
-
-    doThrow(new NoteNotFoundException("note")).when(service)
-        .validateMessage(anyString(), anyString(), anyString(), any());
-    assertThrows(NoteNotFoundException.class,
-        () -> api.send("note", "conv", "{\"content\":\"hello\"}"));
-
-    doThrow(new ForbiddenException()).when(service)
-        .validateMessage(anyString(), anyString(), anyString(), any());
-    assertThrows(ForbiddenException.class,
-        () -> api.send("note", "conv", "{\"content\":\"hello\"}"));
-
-    verify(service, never()).sendMessage(anyString(), anyString(), anyString(), any(), any());
   }
 
   @Test

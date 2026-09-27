@@ -19,25 +19,14 @@ package org.apache.zeppelin.service.assistant;
 
 import java.util.Map;
 
-public class ToolCall {
+public final class ToolSpec {
+  public final String name;
+  public final String description;
+  public final Map<String, Object> parameters;
 
-  private String id;
-  private String name;
-  private Map<String, Object> arguments;
-  private ToolResult result;
-
-  ToolCall() {}
-
-  public ToolCall(String id, String name, Map<String, Object> arguments) {
-    this.id = id;
+  public ToolSpec(String name, String description, Map<String, Object> parameters) {
     this.name = name;
-    this.arguments = arguments;
+    this.description = description;
+    this.parameters = parameters;
   }
-
-  public String getId() { return id; }
-  public String getName() { return name; }
-  public Map<String, Object> getArguments() { return arguments; }
-  public ToolResult getResult() { return result; }
-
-  public void setResult(ToolResult result) { this.result = result; }
 }

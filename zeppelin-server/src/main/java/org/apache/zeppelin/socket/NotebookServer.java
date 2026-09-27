@@ -16,6 +16,7 @@
  */
 package org.apache.zeppelin.socket;
 
+import com.google.common.util.concurrent.ThreadFactoryBuilder;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.google.gson.reflect.TypeToken;
@@ -90,6 +91,8 @@ import org.apache.zeppelin.scheduler.Job;
 import org.apache.zeppelin.scheduler.Job.Status;
 import org.apache.zeppelin.service.JobManagerService;
 import org.apache.zeppelin.service.NotebookService;
+import org.apache.zeppelin.service.assistant.AssistantEventListener;
+import org.apache.zeppelin.service.assistant.NotebookAssistantService;
 import org.apache.zeppelin.service.ServiceContext;
 import org.apache.zeppelin.service.SimpleServiceCallback;
 import org.apache.zeppelin.service.exception.JobManagerForbiddenException;
@@ -147,13 +150,20 @@ public class NotebookServer implements AngularObjectRegistryListener,
 
   private final ExecutorService executorService = Executors.newFixedThreadPool(10);
 
+  private final ExecutorService assistantExecutor = Executors.newFixedThreadPool(
+      10,
+      new ThreadFactoryBuilder().setNameFormat("assistant-run-%d").build()
+  );
+
   // Package-private (not private) so NotebookServerHeartbeatTest can observe scheduler
   // lifecycle without exposing it as part of the public API.
   ScheduledExecutorService heartbeatScheduler;
   private boolean heartbeatInitialized;
 
   // TODO(jl): This will be removed by handling session directly
-  private final Map<String, NotebookSocket> sessionIdNotebookSocketMap = Metrics.gaugeMapSize("zeppelin_session_id_notebook_sockets", Tags.empty(), new ConcurrentHashMap<>());
+  private final Map<String, NotebookSocket> sessionIdNotebookSocketMap =
+      Metrics.gaugeMapSize("zeppelin_session_id_notebook_sockets", Tags.empty(),
+          new ConcurrentHashMap<>());
   private ConnectionManager connectionManager;
   private ZeppelinConfiguration zConf;
   private Provider<Notebook> notebookProvider;
@@ -161,6 +171,7 @@ public class NotebookServer implements AngularObjectRegistryListener,
   private Provider<NotebookService> notebookServiceProvider;
   private AuthorizationService authorizationService;
   private Provider<JobManagerService> jobManagerServiceProvider;
+  private Provider<NotebookAssistantService> assistantServiceProvider;
 
   public NotebookServer() {
     NotebookServer.self.set(this);
@@ -219,6 +230,16 @@ public class NotebookServer implements AngularObjectRegistryListener,
     this.jobManagerServiceProvider = jobManagerServiceProvider;
   }
 
+  @Inject
+  public void setNotebookAssistantService(
+      Provider<NotebookAssistantService> assistantServiceProvider) {
+    this.assistantServiceProvider = assistantServiceProvider;
+  }
+
+  public NotebookAssistantService getNotebookAssistantService() {
+    return assistantServiceProvider.get();
+  }
+
   public Notebook getNotebook() {
     return notebookProvider.get();
   }
@@ -243,7 +264,9 @@ public class NotebookServer implements AngularObjectRegistryListener,
   @OnOpen
   public void onOpen(Session session, EndpointConfig endpointConfig) throws IOException {
 
-    LOGGER.info("Open connection to {} with Session: {}, config: {}", ServerUtils.getRemoteAddress(session), session, endpointConfig.getUserProperties().keySet());
+    LOGGER.info("Open connection to {} with Session: {}, config: {}",
+        ServerUtils.getRemoteAddress(session), session,
+        endpointConfig.getUserProperties().keySet());
 
     Map<String, Object> headers = endpointConfig.getUserProperties();
     String origin = String.valueOf(headers.get(CorsUtils.HEADER_ORIGIN));
@@ -252,7 +275,8 @@ public class NotebookServer implements AngularObjectRegistryListener,
           .computeIfAbsent(session.getId(), unused -> new NotebookSocket(session, headers));
       onOpen(notebookSocket);
     } else {
-      LOGGER.error("Websocket request is not allowed by {} settings. Origin: {}", ZEPPELIN_ALLOWED_ORIGINS,
+      LOGGER.error("Websocket request is not allowed by {} settings. Origin: {}",
+          ZEPPELIN_ALLOWED_ORIGINS,
           origin);
       session.close();
     }
@@ -276,7 +300,8 @@ public class NotebookServer implements AngularObjectRegistryListener,
     heartbeatInitialized = true;
     long intervalMs = zConf.getWebsocketHeartbeatInterval();
     if (intervalMs <= 0) {
-      LOGGER.info("Websocket heartbeat is disabled (zeppelin.websocket.heartbeat.interval={})", intervalMs);
+      LOGGER.info("Websocket heartbeat is disabled (zeppelin.websocket.heartbeat.interval={})",
+          intervalMs);
       return;
     }
     heartbeatScheduler = Executors.newSingleThreadScheduledExecutor(r -> {
@@ -337,7 +362,8 @@ public class NotebookServer implements AngularObjectRegistryListener,
       LOGGER.trace("WebSocket message processing started: operation={}, principal={}",
           receivedMessage.op, receivedMessage.principal);
 
-      TicketContainer.Entry ticketEntry = TicketContainer.instance.getTicketEntry(receivedMessage.principal);
+      TicketContainer.Entry ticketEntry =
+          TicketContainer.instance.getTicketEntry(receivedMessage.principal);
       if (ticketEntry == null || StringUtils.isEmpty(ticketEntry.getTicket())) {
         LOGGER.debug("{} message: no ticket on file for principal {}",
             receivedMessage.op, receivedMessage.principal);
@@ -362,9 +388,10 @@ public class NotebookServer implements AngularObjectRegistryListener,
 
       if (Message.isDisabledForRunningNotes(receivedMessage.op)) {
         boolean noteRunning = getNotebook().processNote((String) receivedMessage.get("noteId"),
-          note -> note != null && note.isRunning());
+            note -> note != null && note.isRunning());
         if (noteRunning) {
-          throw new Exception("Note is now running sequentially. Can not be performed: " + receivedMessage.op);
+          throw new Exception(
+              "Note is now running sequentially. Can not be performed: " + receivedMessage.op);
         }
       }
 
@@ -532,6 +559,9 @@ public class NotebookServer implements AngularObjectRegistryListener,
         case PATCH_PARAGRAPH:
           patchParagraph(conn, context, receivedMessage);
           break;
+        case ASSISTANT_SEND_MESSAGE:
+          sendAssistantMessage(conn, context, receivedMessage);
+          break;
         default:
           break;
       }
@@ -555,7 +585,8 @@ public class NotebookServer implements AngularObjectRegistryListener,
   public void onClose(Session session, CloseReason closeReason) {
     NotebookSocket notebookSocket = sessionIdNotebookSocketMap.remove(session.getId());
     if (notebookSocket != null) {
-      LOGGER.info("Closed connection to {} ({}) {}", ServerUtils.getRemoteAddress(session), closeReason.getCloseCode().getCode(), closeReason.getReasonPhrase());
+      LOGGER.info("Closed connection to {} ({}) {}", ServerUtils.getRemoteAddress(session),
+          closeReason.getCloseCode().getCode(), closeReason.getReasonPhrase());
       removeConnection(notebookSocket);
     }
   }
@@ -568,7 +599,8 @@ public class NotebookServer implements AngularObjectRegistryListener,
   }
 
   private boolean sendParagraphStatusToFrontend() {
-    return zConf.getBoolean(ZeppelinConfiguration.ConfVars.ZEPPELIN_WEBSOCKET_PARAGRAPH_STATUS_PROGRESS);
+    return zConf.getBoolean(
+        ZeppelinConfiguration.ConfVars.ZEPPELIN_WEBSOCKET_PARAGRAPH_STATUS_PROGRESS);
   }
 
   @OnError
@@ -586,7 +618,8 @@ public class NotebookServer implements AngularObjectRegistryListener,
       LOGGER.warn("Client {} is gone", ServerUtils.getRemoteAddress(session));
       LOGGER.debug("IOException", error);
     } else {
-      LOGGER.error("Error in WebSocket Session to {}", ServerUtils.getRemoteAddress(session), error);
+      LOGGER.error("Error in WebSocket Session to {}", ServerUtils.getRemoteAddress(session),
+          error);
     }
   }
 
@@ -624,7 +657,8 @@ public class NotebookServer implements AngularObjectRegistryListener,
             if (ex instanceof JobManagerForbiddenException) {
               LOGGER.info("Job Manager is disabled. Rejecting request from user: {}",
                   context.getAutheInfo().getUser());
-              conn.send(serializeMessage(new Message(OP.JOB_MANAGER_DISABLED).put("errorMessage", ex.getMessage())));
+              conn.send(serializeMessage(
+                  new Message(OP.JOB_MANAGER_DISABLED).put("errorMessage", ex.getMessage())));
             } else {
               LOGGER.warn(ex.getMessage());
             }
@@ -633,7 +667,8 @@ public class NotebookServer implements AngularObjectRegistryListener,
   }
 
   public void broadcastUpdateNoteJobInfo(Note note, long lastUpdateUnixTime) throws IOException {
-    ServiceContext context = new ServiceContext(new AuthenticationInfo(), authorizationService.getOwners(note.getId()));
+    ServiceContext context =
+        new ServiceContext(new AuthenticationInfo(), authorizationService.getOwners(note.getId()));
     getJobManagerService().getNoteJobInfoByUnixTime(lastUpdateUnixTime, context,
         new WebSocketServiceCallback<List<JobManagerService.NoteJobInfo>>(null) {
           @Override
@@ -669,59 +704,60 @@ public class NotebookServer implements AngularObjectRegistryListener,
     String noteId = (String) fromMessage.data.get("noteId");
 
     getNotebook().processNote(noteId,
-      note -> {
-        if (note != null) {
-          if (!authorizationService.isReader(noteId, context.getUserAndRoles())) {
-            permissionError(conn, "get interpreter bindings from",
-                context.getAutheInfo().getUser(), context.getUserAndRoles(),
-                authorizationService.getReaders(noteId));
-            return null;
+        note -> {
+          if (note != null) {
+            if (!authorizationService.isReader(noteId, context.getUserAndRoles())) {
+              permissionError(conn, "get interpreter bindings from",
+                  context.getAutheInfo().getUser(), context.getUserAndRoles(),
+                  authorizationService.getReaders(noteId));
+              return null;
+            }
+            List<InterpreterSetting> bindedSettings =
+                note.getBindedInterpreterSettings(new ArrayList<>(context.getUserAndRoles()));
+            for (InterpreterSetting setting : bindedSettings) {
+              settingList.add(new InterpreterSettingsList(setting.getId(), setting.getName(),
+                  setting.getInterpreterInfos(), true));
+            }
           }
-          List<InterpreterSetting> bindedSettings =
-              note.getBindedInterpreterSettings(new ArrayList<>(context.getUserAndRoles()));
-          for (InterpreterSetting setting : bindedSettings) {
-            settingList.add(new InterpreterSettingsList(setting.getId(), setting.getName(),
-                setting.getInterpreterInfos(), true));
-          }
-        }
-        conn.send(serializeMessage(new Message(OP.INTERPRETER_BINDINGS)
-            .put("noteId", noteId)
-            .put("interpreterBindings", settingList)));
-        return null;
-      });
+          conn.send(serializeMessage(new Message(OP.INTERPRETER_BINDINGS)
+              .put("noteId", noteId)
+              .put("interpreterBindings", settingList)));
+          return null;
+        });
   }
 
-  public void saveInterpreterBindings(NotebookSocket conn, ServiceContext context, Message fromMessage)
+  public void saveInterpreterBindings(NotebookSocket conn, ServiceContext context,
+                                      Message fromMessage)
       throws IOException {
     List<InterpreterSettingsList> settingList = new ArrayList<>();
     String noteId = (String) fromMessage.data.get("noteId");
     // use write lock, because defaultInterpreterGroup is overwritten
     boolean permitted = getNotebook().processNote(noteId,
-      note -> {
-        if (note != null) {
-          if (!authorizationService.isWriter(noteId, context.getUserAndRoles())) {
-            permissionError(conn, "save interpreter bindings for",
-                context.getAutheInfo().getUser(), context.getUserAndRoles(),
-                authorizationService.getWriters(noteId));
-            return false;
+        note -> {
+          if (note != null) {
+            if (!authorizationService.isWriter(noteId, context.getUserAndRoles())) {
+              permissionError(conn, "save interpreter bindings for",
+                  context.getAutheInfo().getUser(), context.getUserAndRoles(),
+                  authorizationService.getWriters(noteId));
+              return false;
+            }
+            List<String> settingIdList =
+                gson.fromJson(String.valueOf(fromMessage.data.get("selectedSettingIds")),
+                    new TypeToken<ArrayList<String>>() {
+                    }.getType());
+            if (!settingIdList.isEmpty()) {
+              note.setDefaultInterpreterGroup(settingIdList.get(0));
+              getNotebook().saveNote(note, context.getAutheInfo());
+            }
+            List<InterpreterSetting> bindedSettings =
+                note.getBindedInterpreterSettings(new ArrayList<>(context.getUserAndRoles()));
+            for (InterpreterSetting setting : bindedSettings) {
+              settingList.add(new InterpreterSettingsList(setting.getId(), setting.getName(),
+                  setting.getInterpreterInfos(), true));
+            }
           }
-          List<String> settingIdList =
-              gson.fromJson(String.valueOf(fromMessage.data.get("selectedSettingIds")),
-                  new TypeToken<ArrayList<String>>() {
-                  }.getType());
-          if (!settingIdList.isEmpty()) {
-            note.setDefaultInterpreterGroup(settingIdList.get(0));
-            getNotebook().saveNote(note, context.getAutheInfo());
-          }
-          List<InterpreterSetting> bindedSettings =
-            note.getBindedInterpreterSettings(new ArrayList<>(context.getUserAndRoles()));
-          for (InterpreterSetting setting : bindedSettings) {
-            settingList.add(new InterpreterSettingsList(setting.getId(), setting.getName(),
-              setting.getInterpreterInfos(), true));
-          }
-        }
-        return true;
-      });
+          return true;
+        });
     if (permitted) {
       conn.send(serializeMessage(
           new Message(OP.INTERPRETER_BINDINGS)
@@ -757,13 +793,15 @@ public class NotebookServer implements AngularObjectRegistryListener,
   private void inlineBroadcastParagraphs(Map<String, Paragraph> userParagraphMap, String msgId) {
     if (null != userParagraphMap) {
       for (String user : userParagraphMap.keySet()) {
-        Message message = new Message(OP.PARAGRAPH).withMsgId(msgId).put("paragraph", userParagraphMap.get(user));
+        Message message =
+            new Message(OP.PARAGRAPH).withMsgId(msgId).put("paragraph", userParagraphMap.get(user));
         connectionManager.multicastToUser(user, message);
       }
     }
   }
 
-  private void broadcastParagraphs(Map<String, Paragraph> userParagraphMap, Paragraph defaultParagraph, String msgId) {
+  private void broadcastParagraphs(Map<String, Paragraph> userParagraphMap,
+                                   Paragraph defaultParagraph, String msgId) {
     inlineBroadcastParagraphs(userParagraphMap, msgId);
   }
 
@@ -772,7 +810,8 @@ public class NotebookServer implements AngularObjectRegistryListener,
     int paraIndex = note.getParagraphs().indexOf(para);
 
     Message message =
-        new Message(OP.PARAGRAPH_ADDED).withMsgId(msgId).put("paragraph", para).put("index", paraIndex);
+        new Message(OP.PARAGRAPH_ADDED).withMsgId(msgId).put("paragraph", para)
+            .put("index", paraIndex);
     connectionManager.broadcast(note.getId(), message);
   }
 
@@ -802,7 +841,8 @@ public class NotebookServer implements AngularObjectRegistryListener,
     getNotebookService().listNotesInfo(false, context,
         new WebSocketServiceCallback<List<NoteInfo>>(conn) {
           @Override
-          public void onSuccess(List<NoteInfo> notesInfo, ServiceContext context) throws IOException {
+          public void onSuccess(List<NoteInfo> notesInfo, ServiceContext context)
+              throws IOException {
             super.onSuccess(notesInfo, context);
             connectionManager.unicast(new Message(OP.NOTES_INFO).put("notes", notesInfo), conn);
           }
@@ -843,7 +883,8 @@ public class NotebookServer implements AngularObjectRegistryListener,
     return true;
   }
 
-  private void getNote(NotebookSocket conn, ServiceContext context, Message fromMessage) throws IOException {
+  private void getNote(NotebookSocket conn, ServiceContext context, Message fromMessage)
+      throws IOException {
     String noteId = (String) fromMessage.get("id");
     if (noteId == null) {
       return;
@@ -928,7 +969,8 @@ public class NotebookServer implements AngularObjectRegistryListener,
         });
   }
 
-  private void updateNote(NotebookSocket conn, ServiceContext context, Message fromMessage) throws IOException {
+  private void updateNote(NotebookSocket conn, ServiceContext context, Message fromMessage)
+      throws IOException {
     String noteId = (String) fromMessage.get("id");
     String name = (String) fromMessage.get("name");
     Map<String, Object> config = (Map<String, Object>) fromMessage.get("config");
@@ -951,7 +993,8 @@ public class NotebookServer implements AngularObjectRegistryListener,
         });
   }
 
-  private void updatePersonalizedMode(NotebookSocket conn, ServiceContext context, Message fromMessage)
+  private void updatePersonalizedMode(NotebookSocket conn, ServiceContext context,
+                                      Message fromMessage)
       throws IOException {
     String noteId = (String) fromMessage.get("id");
     String personalized = (String) fromMessage.get("personalized");
@@ -968,7 +1011,8 @@ public class NotebookServer implements AngularObjectRegistryListener,
         });
   }
 
-  private void renameNote(NotebookSocket conn, ServiceContext context, Message fromMessage) throws IOException {
+  private void renameNote(NotebookSocket conn, ServiceContext context, Message fromMessage)
+      throws IOException {
     String noteId = (String) fromMessage.get("id");
     String name = (String) fromMessage.get("name");
     boolean isRelativePath = false;
@@ -990,17 +1034,18 @@ public class NotebookServer implements AngularObjectRegistryListener,
           @Override
           public void onFailure(Exception ex, ServiceContext context) throws IOException {
             super.onFailure(ex, context);
-         // If there was a failure, then resend the latest notebook information to update stale UI
+            // If there was a failure, then resend the latest notebook information to update stale UI
             getNotebook().processNote(noteId,
-              note -> {
-                broadcastNote(note);
-                return null;
-              });
+                note -> {
+                  broadcastNote(note);
+                  return null;
+                });
           }
         });
   }
 
-  private void renameFolder(NotebookSocket conn, ServiceContext context, Message fromMessage) throws IOException {
+  private void renameFolder(NotebookSocket conn, ServiceContext context, Message fromMessage)
+      throws IOException {
     String oldFolderId = (String) fromMessage.get("id");
     String newFolderId = (String) fromMessage.get("name");
     getNotebookService().renameFolder(oldFolderId, newFolderId, context,
@@ -1013,7 +1058,8 @@ public class NotebookServer implements AngularObjectRegistryListener,
         });
   }
 
-  private void createNote(NotebookSocket conn, ServiceContext context, Message message) throws IOException {
+  private void createNote(NotebookSocket conn, ServiceContext context, Message message)
+      throws IOException {
 
     String noteName = (String) message.get("name");
     String defaultInterpreterGroup = (String) message.get("defaultInterpreterGroup");
@@ -1037,7 +1083,8 @@ public class NotebookServer implements AngularObjectRegistryListener,
         });
   }
 
-  private void deleteNote(NotebookSocket conn, ServiceContext context, Message fromMessage) throws IOException {
+  private void deleteNote(NotebookSocket conn, ServiceContext context, Message fromMessage)
+      throws IOException {
     String noteId = (String) fromMessage.get("id");
     getNotebookService().removeNote(noteId, context,
         new WebSocketServiceCallback<String>(conn) {
@@ -1050,13 +1097,15 @@ public class NotebookServer implements AngularObjectRegistryListener,
         });
   }
 
-  private void removeFolder(NotebookSocket conn, ServiceContext context, Message fromMessage) throws IOException {
+  private void removeFolder(NotebookSocket conn, ServiceContext context, Message fromMessage)
+      throws IOException {
 
     String folderPath = (String) fromMessage.get("id");
     getNotebookService().removeFolder(folderPath, context,
         new WebSocketServiceCallback<List<NoteInfo>>(conn) {
           @Override
-          public void onSuccess(List<NoteInfo> notesInfo, ServiceContext context) throws IOException {
+          public void onSuccess(List<NoteInfo> notesInfo, ServiceContext context)
+              throws IOException {
             super.onSuccess(notesInfo, context);
             for (NoteInfo noteInfo : notesInfo) {
               connectionManager.removeNoteConnection(noteInfo.getId());
@@ -1066,7 +1115,8 @@ public class NotebookServer implements AngularObjectRegistryListener,
         });
   }
 
-  private void moveNoteToTrash(NotebookSocket conn, ServiceContext context, Message fromMessage) throws IOException {
+  private void moveNoteToTrash(NotebookSocket conn, ServiceContext context, Message fromMessage)
+      throws IOException {
     String noteId = (String) fromMessage.get("id");
     getNotebookService().moveNoteToTrash(noteId, context,
         new WebSocketServiceCallback<Note>(conn) {
@@ -1094,7 +1144,8 @@ public class NotebookServer implements AngularObjectRegistryListener,
 
   }
 
-  private void restoreNote(NotebookSocket conn, ServiceContext context, Message fromMessage) throws IOException {
+  private void restoreNote(NotebookSocket conn, ServiceContext context, Message fromMessage)
+      throws IOException {
     String noteId = (String) fromMessage.get("id");
     getNotebookService().restoreNote(noteId, context,
         new WebSocketServiceCallback<Note>(conn) {
@@ -1146,7 +1197,8 @@ public class NotebookServer implements AngularObjectRegistryListener,
         });
   }
 
-  private void updateParagraph(NotebookSocket conn, ServiceContext context, Message fromMessage) throws IOException {
+  private void updateParagraph(NotebookSocket conn, ServiceContext context, Message fromMessage)
+      throws IOException {
     String paragraphId = (String) fromMessage.get("id");
     String noteId = connectionManager.getAssociatedNoteId(conn);
     if (noteId == null) {
@@ -1163,7 +1215,8 @@ public class NotebookServer implements AngularObjectRegistryListener,
           public void onSuccess(Paragraph p, ServiceContext context) throws IOException {
             super.onSuccess(p, context);
             if (p.getNote().isPersonalizedMode()) {
-              Map<String, Paragraph> userParagraphMap = p.getNote().getParagraph(paragraphId).getUserParagraphMap();
+              Map<String, Paragraph> userParagraphMap =
+                  p.getNote().getParagraph(paragraphId).getUserParagraphMap();
               broadcastParagraphs(userParagraphMap, p, fromMessage.msgId);
             } else {
               broadcastParagraph(p.getNote(), p, fromMessage.msgId);
@@ -1209,6 +1262,30 @@ public class NotebookServer implements AngularObjectRegistryListener,
         });
   }
 
+  private void sendAssistantMessage(
+      NotebookSocket conn,
+      ServiceContext context,
+      Message fromMessage
+  ) {
+    String noteId = (String) fromMessage.get("noteId");
+    String conversationId = (String) fromMessage.get("conversationId");
+    String content = (String) fromMessage.get("content");
+    AssistantEventListener sink = (type, payload) ->
+        connectionManager.broadcast(noteId, new Message(OP.ASSISTANT_EVENT)
+            .put("conversationId", conversationId)
+            .put("type", type.wireName)
+            .put("payload", payload));
+    assistantExecutor.submit(
+        () -> getNotebookAssistantService().sendMessage(
+            noteId,
+            conversationId,
+            content,
+            context,
+            sink
+        )
+    );
+  }
+
   private void cloneNote(NotebookSocket conn,
                          ServiceContext context,
                          Message fromMessage) throws IOException {
@@ -1247,20 +1324,21 @@ public class NotebookServer implements AngularObjectRegistryListener,
   protected void convertNote(NotebookSocket conn, Message fromMessage) throws IOException {
     String noteId = fromMessage.get("noteId").toString();
     getNotebook().processNote(noteId,
-      note -> {
-        if (note == null) {
-          throw new IOException("No such note: " + noteId);
-        } else {
-          Message resp = new Message(OP.CONVERTED_NOTE_NBFORMAT)
-              .put("nbformat", new JupyterUtil().getNbformat(note.toJson()))
-              .put("noteName", fromMessage.get("noteName"));
-          conn.send(serializeMessage(resp));
-          return null;
-        }
-      });
+        note -> {
+          if (note == null) {
+            throw new IOException("No such note: " + noteId);
+          } else {
+            Message resp = new Message(OP.CONVERTED_NOTE_NBFORMAT)
+                .put("nbformat", new JupyterUtil().getNbformat(note.toJson()))
+                .put("noteName", fromMessage.get("noteName"));
+            conn.send(serializeMessage(resp));
+            return null;
+          }
+        });
   }
 
-  protected String importNote(NotebookSocket conn, ServiceContext context, Message fromMessage) throws IOException {
+  protected String importNote(NotebookSocket conn, ServiceContext context, Message fromMessage)
+      throws IOException {
     String noteJson = null;
     String noteName = (String) ((Map) fromMessage.get("note")).get("name");
     // Checking whether the notebook data is from a Jupyter or a Zeppelin Notebook.
@@ -1297,7 +1375,8 @@ public class NotebookServer implements AngularObjectRegistryListener,
           @Override
           public void onSuccess(Paragraph p, ServiceContext context) throws IOException {
             super.onSuccess(p, context);
-            connectionManager.broadcast(p.getNote().getId(), new Message(OP.PARAGRAPH_REMOVED).put("id", p.getId()));
+            connectionManager.broadcast(p.getNote().getId(),
+                new Message(OP.PARAGRAPH_REMOVED).put("id", p.getId()));
           }
         });
   }
@@ -1313,7 +1392,8 @@ public class NotebookServer implements AngularObjectRegistryListener,
           public void onSuccess(Paragraph p, ServiceContext context) throws IOException {
             super.onSuccess(p, context);
             if (p.getNote().isPersonalizedMode()) {
-              connectionManager.unicastParagraph(p.getNote(), p, context.getAutheInfo().getUser(), fromMessage.msgId);
+              connectionManager.unicastParagraph(p.getNote(), p, context.getAutheInfo().getUser(),
+                  fromMessage.msgId);
             } else {
               broadcastParagraph(p.getNote(), p, fromMessage.msgId);
             }
@@ -1331,7 +1411,8 @@ public class NotebookServer implements AngularObjectRegistryListener,
     getNotebookService().completion(noteId, paragraphId, buffer, cursor, context,
         new WebSocketServiceCallback<List<InterpreterCompletion>>(conn) {
           @Override
-          public void onSuccess(List<InterpreterCompletion> completions, ServiceContext context) throws IOException {
+          public void onSuccess(List<InterpreterCompletion> completions, ServiceContext context)
+              throws IOException {
             super.onSuccess(completions, context);
             Message resp = new Message(OP.COMPLETION_LIST).put("id", paragraphId);
             resp.put("completions", completions);
@@ -1379,10 +1460,10 @@ public class NotebookServer implements AngularObjectRegistryListener,
                     .put("paragraphId", ao.getParagraphId()),
                 conn);
             getNotebook().processNote(noteId,
-              note -> {
-                note.addOrUpdateAngularObject(interpreterGroupId, ao);
-                return null;
-              });
+                note -> {
+                  note.addOrUpdateAngularObject(interpreterGroupId, ao);
+                  return null;
+                });
           }
         });
   }
@@ -1392,7 +1473,8 @@ public class NotebookServer implements AngularObjectRegistryListener,
    * registry given a noteId and a paragraph id.
    * 2. Save AngularObject to note.
    */
-  protected void angularObjectClientBind(NotebookSocket conn, Message fromMessage) throws Exception {
+  protected void angularObjectClientBind(NotebookSocket conn, Message fromMessage)
+      throws Exception {
     String noteId = fromMessage.getType("noteId");
     String varName = fromMessage.getType("name");
     Object varValue = fromMessage.get("value");
@@ -1403,23 +1485,25 @@ public class NotebookServer implements AngularObjectRegistryListener,
     }
 
     getNotebook().processNote(noteId,
-      note -> {
-        if (note != null) {
-          InterpreterGroup interpreterGroup;
-          try {
-            interpreterGroup = findInterpreterGroupForParagraph(note, paragraphId);
-          } catch (Exception e) {
-            LOGGER.error("No interpreter group found for noteId {} and paragraphId {}", noteId, paragraphId, e);
-            return null;
+        note -> {
+          if (note != null) {
+            InterpreterGroup interpreterGroup;
+            try {
+              interpreterGroup = findInterpreterGroupForParagraph(note, paragraphId);
+            } catch (Exception e) {
+              LOGGER.error("No interpreter group found for noteId {} and paragraphId {}", noteId,
+                  paragraphId, e);
+              return null;
+            }
+            final RemoteAngularObjectRegistry registry = (RemoteAngularObjectRegistry)
+                interpreterGroup.getAngularObjectRegistry();
+            AngularObject ao =
+                pushAngularObjectToRemoteRegistry(noteId, paragraphId, varName, varValue,
+                    registry, interpreterGroup.getId(), conn);
+            note.addOrUpdateAngularObject(interpreterGroup.getId(), ao);
           }
-          final RemoteAngularObjectRegistry registry = (RemoteAngularObjectRegistry)
-              interpreterGroup.getAngularObjectRegistry();
-          AngularObject ao = pushAngularObjectToRemoteRegistry(noteId, paragraphId, varName, varValue,
-              registry, interpreterGroup.getId(), conn);
-          note.addOrUpdateAngularObject(interpreterGroup.getId(), ao);
-        }
-        return null;
-      });
+          return null;
+        });
   }
 
   /**
@@ -1427,7 +1511,8 @@ public class NotebookServer implements AngularObjectRegistryListener,
    * registry given a noteId and an optional list of paragraph id(s).
    * 2. Delete AngularObject from note.
    */
-  protected void angularObjectClientUnbind(NotebookSocket conn, Message fromMessage) throws Exception {
+  protected void angularObjectClientUnbind(NotebookSocket conn, Message fromMessage)
+      throws Exception {
     String noteId = fromMessage.getType("noteId");
     String varName = fromMessage.getType("name");
     String paragraphId = fromMessage.getType("paragraphId");
@@ -1437,26 +1522,29 @@ public class NotebookServer implements AngularObjectRegistryListener,
     }
 
     getNotebook().processNote(noteId,
-      note -> {
-        if (note != null) {
-          InterpreterGroup interpreterGroup;
-          try {
-            interpreterGroup = findInterpreterGroupForParagraph(note, paragraphId);
-          } catch (Exception e) {
-            LOGGER.error("No interpreter group found for noteId {} and paragraphId {}", noteId, paragraphId, e);
-            return null;
+        note -> {
+          if (note != null) {
+            InterpreterGroup interpreterGroup;
+            try {
+              interpreterGroup = findInterpreterGroupForParagraph(note, paragraphId);
+            } catch (Exception e) {
+              LOGGER.error("No interpreter group found for noteId {} and paragraphId {}", noteId,
+                  paragraphId, e);
+              return null;
+            }
+            final RemoteAngularObjectRegistry registry =
+                (RemoteAngularObjectRegistry) interpreterGroup.getAngularObjectRegistry();
+            AngularObject ao =
+                removeAngularFromRemoteRegistry(noteId, paragraphId, varName, registry,
+                    interpreterGroup.getId(), conn);
+            note.deleteAngularObject(interpreterGroup.getId(), noteId, paragraphId, varName);
           }
-          final RemoteAngularObjectRegistry registry =
-              (RemoteAngularObjectRegistry) interpreterGroup.getAngularObjectRegistry();
-          AngularObject ao =
-              removeAngularFromRemoteRegistry(noteId, paragraphId, varName, registry, interpreterGroup.getId(), conn);
-          note.deleteAngularObject(interpreterGroup.getId(), noteId, paragraphId, varName);
-        }
-        return null;
-      });
+          return null;
+        });
   }
 
-  private InterpreterGroup findInterpreterGroupForParagraph(Note note, String paragraphId) throws Exception {
+  private InterpreterGroup findInterpreterGroupForParagraph(Note note, String paragraphId)
+      throws Exception {
     final Paragraph paragraph = note.getParagraph(paragraphId);
     if (paragraph == null) {
       throw new IllegalArgumentException("Unknown paragraph with id : " + paragraphId);
@@ -1464,12 +1552,14 @@ public class NotebookServer implements AngularObjectRegistryListener,
     return paragraph.getBindedInterpreter().getInterpreterGroup();
   }
 
-  private AngularObject pushAngularObjectToRemoteRegistry(String noteId, String paragraphId, String varName,
+  private AngularObject pushAngularObjectToRemoteRegistry(String noteId, String paragraphId,
+                                                          String varName,
                                                           Object varValue,
                                                           RemoteAngularObjectRegistry remoteRegistry,
                                                           String interpreterGroupId,
                                                           NotebookSocket conn) {
-    final AngularObject ao = remoteRegistry.addAndNotifyRemoteProcess(varName, varValue, noteId, paragraphId);
+    final AngularObject ao =
+        remoteRegistry.addAndNotifyRemoteProcess(varName, varValue, noteId, paragraphId);
 
     connectionManager.broadcastExcept(noteId, new Message(OP.ANGULAR_OBJECT_UPDATE)
         .put("angularObject", ao)
@@ -1479,11 +1569,13 @@ public class NotebookServer implements AngularObjectRegistryListener,
     return ao;
   }
 
-  private AngularObject removeAngularFromRemoteRegistry(String noteId, String paragraphId, String varName,
+  private AngularObject removeAngularFromRemoteRegistry(String noteId, String paragraphId,
+                                                        String varName,
                                                         RemoteAngularObjectRegistry remoteRegistry,
                                                         String interpreterGroupId,
                                                         NotebookSocket conn) {
-    final AngularObject ao = remoteRegistry.removeAndNotifyRemoteProcess(varName, noteId, paragraphId);
+    final AngularObject ao =
+        remoteRegistry.removeAndNotifyRemoteProcess(varName, noteId, paragraphId);
     connectionManager.broadcastExcept(noteId, new Message(OP.ANGULAR_OBJECT_REMOVE)
         .put("angularObject", ao)
         .put("interpreterGroupId", interpreterGroupId).put("noteId", noteId)
@@ -1548,13 +1640,16 @@ public class NotebookServer implements AngularObjectRegistryListener,
     updateParagraph(conn, context, fromMessage);
   }
 
-  private void cancelParagraph(NotebookSocket conn, ServiceContext context, Message fromMessage) throws IOException {
+  private void cancelParagraph(NotebookSocket conn, ServiceContext context, Message fromMessage)
+      throws IOException {
     final String paragraphId = (String) fromMessage.get("id");
     String noteId = connectionManager.getAssociatedNoteId(conn);
-    getNotebookService().cancelParagraph(noteId, paragraphId, context, new WebSocketServiceCallback<>(conn));
+    getNotebookService().cancelParagraph(noteId, paragraphId, context,
+        new WebSocketServiceCallback<>(conn));
   }
 
-  private void cancelAllParagraphs(NotebookSocket conn, ServiceContext context, Message fromMessage) throws IOException {
+  private void cancelAllParagraphs(NotebookSocket conn, ServiceContext context, Message fromMessage)
+      throws IOException {
     final String noteId = (String) fromMessage.get("noteId");
     getNotebookService().cancelAllParagraphs(noteId, context, new WebSocketServiceCallback<>(conn));
   }
@@ -1575,14 +1670,14 @@ public class NotebookServer implements AngularObjectRegistryListener,
           // If one paragraph fails, we need to broadcast paragraph states to the client,
           // or paragraphs not run will stay in PENDING state.
           getNotebookService().getNote(noteId, context, new SimpleServiceCallback<>(),
-            note -> {
-              if (note != null) {
-                for (Paragraph p : note.getParagraphs()) {
-                  broadcastParagraph(note, p, null);
+              note -> {
+                if (note != null) {
+                  for (Paragraph p : note.getParagraphs()) {
+                    broadcastParagraph(note, p, null);
+                  }
                 }
-              }
-              return null;
-            });
+                return null;
+              });
         }
       } catch (Throwable t) {
         LOGGER.error("Error in running all paragraphs", t);
@@ -1617,32 +1712,33 @@ public class NotebookServer implements AngularObjectRegistryListener,
     Map<String, Object> params = (Map<String, Object>) fromMessage.get("params");
     Map<String, Object> config = (Map<String, Object>) fromMessage.get("config");
     getNotebook().processNote(noteId,
-      note -> {
-        getNotebookService().runParagraph(note, paragraphId, title, text, params, config, null,
-          false, false, context,
-          new WebSocketServiceCallback<Paragraph>(conn) {
-            @Override
-            public void onSuccess(Paragraph p, ServiceContext context)
-                throws IOException {
-              super.onSuccess(p, context);
-              if (p.getNote().isPersonalizedMode()) {
-                Paragraph p2 = p.getNote().clearPersonalizedParagraphOutput(paragraphId,
-                    context.getAutheInfo().getUser());
-                connectionManager.unicastParagraph(p.getNote(), p2, context.getAutheInfo().getUser(), fromMessage.msgId);
-              }
+        note -> {
+          getNotebookService().runParagraph(note, paragraphId, title, text, params, config, null,
+              false, false, context,
+              new WebSocketServiceCallback<Paragraph>(conn) {
+                @Override
+                public void onSuccess(Paragraph p, ServiceContext context)
+                    throws IOException {
+                  super.onSuccess(p, context);
+                  if (p.getNote().isPersonalizedMode()) {
+                    Paragraph p2 = p.getNote().clearPersonalizedParagraphOutput(paragraphId,
+                        context.getAutheInfo().getUser());
+                    connectionManager.unicastParagraph(p.getNote(), p2,
+                        context.getAutheInfo().getUser(), fromMessage.msgId);
+                  }
 
-              // if it's the last paragraph and not empty, let's add a new one
-              boolean isTheLastParagraph = p.getNote().isLastParagraph(paragraphId);
-              if (!(StringUtils.isEmpty(p.getText()) ||
-                StringUtils.isEmpty(p.getScriptText())) &&
-                  isTheLastParagraph) {
-                Paragraph newPara = p.getNote().addNewParagraph(p.getAuthenticationInfo());
-                broadcastNewParagraph(p.getNote(), newPara, fromMessage.msgId);
-              }
-            }
-          });
-        return null;
-      });
+                  // if it's the last paragraph and not empty, let's add a new one
+                  boolean isTheLastParagraph = p.getNote().isLastParagraph(paragraphId);
+                  if (!(StringUtils.isEmpty(p.getText()) ||
+                      StringUtils.isEmpty(p.getScriptText())) &&
+                      isTheLastParagraph) {
+                    Paragraph newPara = p.getNote().addNewParagraph(p.getAuthenticationInfo());
+                    broadcastNewParagraph(p.getNote(), newPara, fromMessage.msgId);
+                  }
+                }
+              });
+          return null;
+        });
 
   }
 
@@ -1660,7 +1756,8 @@ public class NotebookServer implements AngularObjectRegistryListener,
             if (!Revision.isEmpty(revision)) {
 
               List<Revision> revisions = getNotebook().processNote(noteId,
-                note -> getNotebook().listRevisionHistory(noteId, note.getPath(), context.getAutheInfo()));
+                  note -> getNotebook().listRevisionHistory(noteId, note.getPath(),
+                      context.getAutheInfo()));
               conn.send(serializeMessage(new Message(OP.LIST_REVISION_HISTORY)
                   .put("noteId", noteId)
                   .put("revisionList", revisions)));
@@ -1681,7 +1778,8 @@ public class NotebookServer implements AngularObjectRegistryListener,
     getNotebookService().listRevisionHistory(noteId, context,
         new WebSocketServiceCallback<List<Revision>>(conn) {
           @Override
-          public void onSuccess(List<Revision> revisions, ServiceContext context) throws IOException {
+          public void onSuccess(List<Revision> revisions, ServiceContext context)
+              throws IOException {
             super.onSuccess(revisions, context);
             conn.send(serializeMessage(new Message(OP.LIST_REVISION_HISTORY)
                 .put("noteId", noteId)
@@ -1805,31 +1903,31 @@ public class NotebookServer implements AngularObjectRegistryListener,
         .put("data", output);
     try {
       getNotebook().processNote(noteId,
-        note -> {
-          if (note == null) {
-            LOGGER.warn("Note {} not found", noteId);
-            return null;
-          }
-          if (note.isPersonalizedMode()) {
-            if (executionOwner == null) {
-              LOGGER.debug("Dropping ownerless personalized output for note {} paragraph {}",
-                  noteId, paragraphId);
+          note -> {
+            if (note == null) {
+              LOGGER.warn("Note {} not found", noteId);
               return null;
             }
-            // The shared outputBuffer is both what checkpointOutput saves and what new users'
-            // copies are cloned from, so one user's output goes to that user's own copy.
-            Paragraph userParagraph =
-                note.getParagraph(paragraphId).getUserParagraphMap().get(executionOwner);
-            if (userParagraph != null) {
-              userParagraph.updateOutputBuffer(index, type, output);
+            if (note.isPersonalizedMode()) {
+              if (executionOwner == null) {
+                LOGGER.debug("Dropping ownerless personalized output for note {} paragraph {}",
+                    noteId, paragraphId);
+                return null;
+              }
+              // The shared outputBuffer is both what checkpointOutput saves and what new users'
+              // copies are cloned from, so one user's output goes to that user's own copy.
+              Paragraph userParagraph =
+                  note.getParagraph(paragraphId).getUserParagraphMap().get(executionOwner);
+              if (userParagraph != null) {
+                userParagraph.updateOutputBuffer(index, type, output);
+              }
+              connectionManager.multicastToUser(executionOwner, msg);
+              return null;
             }
-            connectionManager.multicastToUser(executionOwner, msg);
+            note.getParagraph(paragraphId).updateOutputBuffer(index, type, output);
+            connectionManager.broadcast(noteId, msg);
             return null;
-          }
-          note.getParagraph(paragraphId).updateOutputBuffer(index, type, output);
-          connectionManager.broadcast(noteId, msg);
-          return null;
-        });
+          });
     } catch (IOException e) {
       LOGGER.warn("Fail to call onParagraphOutputUpdated", e);
     }
@@ -1846,33 +1944,33 @@ public class NotebookServer implements AngularObjectRegistryListener,
 
     try {
       getNotebook().processNote(noteId,
-        note -> {
-          if (note == null) {
-            // It is possible the note is removed, but the job is still running
-            LOGGER.warn("Note {} doesn't existed, it maybe deleted.", noteId);
-            return null;
-          }
-          if (note.isPersonalizedMode()) {
-            if (executionOwner == null) {
-              LOGGER.debug("Dropping ownerless personalized clear for note {} paragraph {}",
-                  noteId, paragraphId);
+          note -> {
+            if (note == null) {
+              // It is possible the note is removed, but the job is still running
+              LOGGER.warn("Note {} doesn't existed, it maybe deleted.", noteId);
               return null;
             }
-            // Clearing the shared paragraph would discard output the other users still own.
-            if (note.getParagraph(paragraphId).getUserParagraphMap()
-                .containsKey(executionOwner)) {
-              Paragraph userParagraph =
-                  note.clearPersonalizedParagraphOutput(paragraphId, executionOwner);
-              connectionManager.multicastToUser(executionOwner, new Message(OP.PARAGRAPH)
-                  .withMsgId(MSG_ID_NOT_DEFINED).put("paragraph", userParagraph));
+            if (note.isPersonalizedMode()) {
+              if (executionOwner == null) {
+                LOGGER.debug("Dropping ownerless personalized clear for note {} paragraph {}",
+                    noteId, paragraphId);
+                return null;
+              }
+              // Clearing the shared paragraph would discard output the other users still own.
+              if (note.getParagraph(paragraphId).getUserParagraphMap()
+                  .containsKey(executionOwner)) {
+                Paragraph userParagraph =
+                    note.clearPersonalizedParagraphOutput(paragraphId, executionOwner);
+                connectionManager.multicastToUser(executionOwner, new Message(OP.PARAGRAPH)
+                    .withMsgId(MSG_ID_NOT_DEFINED).put("paragraph", userParagraph));
+              }
+              return null;
             }
+            note.clearParagraphOutput(paragraphId);
+            Paragraph paragraph = note.getParagraph(paragraphId);
+            broadcastParagraph(note, paragraph, MSG_ID_NOT_DEFINED);
             return null;
-          }
-          note.clearParagraphOutput(paragraphId);
-          Paragraph paragraph = note.getParagraph(paragraphId);
-          broadcastParagraph(note, paragraph, MSG_ID_NOT_DEFINED);
-          return null;
-        });
+          });
 
     } catch (IOException e) {
       LOGGER.warn("Fail to call onParagraphOutputClear", e);
@@ -1929,60 +2027,61 @@ public class NotebookServer implements AngularObjectRegistryListener,
                             List<String> paragraphIds,
                             String curParagraphId) throws IOException {
     getNotebook().processNote(noteId,
-      note -> {
-        final List<String> toBeRunParagraphIds = new ArrayList<>();
-        if (note == null) {
-          throw new IOException("Not existed noteId: " + noteId);
-        }
-        if (!paragraphIds.isEmpty() && !paragraphIndices.isEmpty()) {
-          throw new IOException("Can not specify paragraphIds and paragraphIndices together");
-        }
-        if (paragraphIds != null && !paragraphIds.isEmpty()) {
-          for (String paragraphId : paragraphIds) {
-            if (note.getParagraph(paragraphId) == null) {
-              throw new IOException("Not existed paragraphId: " + paragraphId);
-            }
-            if (!paragraphId.equals(curParagraphId)) {
-              toBeRunParagraphIds.add(paragraphId);
+        note -> {
+          final List<String> toBeRunParagraphIds = new ArrayList<>();
+          if (note == null) {
+            throw new IOException("Not existed noteId: " + noteId);
+          }
+          if (!paragraphIds.isEmpty() && !paragraphIndices.isEmpty()) {
+            throw new IOException("Can not specify paragraphIds and paragraphIndices together");
+          }
+          if (paragraphIds != null && !paragraphIds.isEmpty()) {
+            for (String paragraphId : paragraphIds) {
+              if (note.getParagraph(paragraphId) == null) {
+                throw new IOException("Not existed paragraphId: " + paragraphId);
+              }
+              if (!paragraphId.equals(curParagraphId)) {
+                toBeRunParagraphIds.add(paragraphId);
+              }
             }
           }
-        }
-        if (paragraphIndices != null && !paragraphIndices.isEmpty()) {
-          for (int paragraphIndex : paragraphIndices) {
-            if (note.getParagraph(paragraphIndex) == null) {
-              throw new IOException("Not existed paragraphIndex: " + paragraphIndex);
-            }
-            if (!note.getParagraph(paragraphIndex).getId().equals(curParagraphId)) {
-              toBeRunParagraphIds.add(note.getParagraph(paragraphIndex).getId());
-            }
-          }
-        }
-        // run the whole note except the current paragraph
-        if (paragraphIds.isEmpty() && paragraphIndices.isEmpty()) {
-          for (Paragraph paragraph : note.getParagraphs()) {
-            if (!paragraph.getId().equals(curParagraphId)) {
-              toBeRunParagraphIds.add(paragraph.getId());
+          if (paragraphIndices != null && !paragraphIndices.isEmpty()) {
+            for (int paragraphIndex : paragraphIndices) {
+              if (note.getParagraph(paragraphIndex) == null) {
+                throw new IOException("Not existed paragraphIndex: " + paragraphIndex);
+              }
+              if (!note.getParagraph(paragraphIndex).getId().equals(curParagraphId)) {
+                toBeRunParagraphIds.add(note.getParagraph(paragraphIndex).getId());
+              }
             }
           }
-        }
-        Runnable runThread = new Runnable() {
-          @Override
-          public void run() {
-            for (String paragraphId : toBeRunParagraphIds) {
-              note.run(paragraphId, true);
+          // run the whole note except the current paragraph
+          if (paragraphIds.isEmpty() && paragraphIndices.isEmpty()) {
+            for (Paragraph paragraph : note.getParagraphs()) {
+              if (!paragraph.getId().equals(curParagraphId)) {
+                toBeRunParagraphIds.add(paragraph.getId());
+              }
             }
           }
-        };
-        executorService.submit(runThread);
-        return null;
-      });
+          Runnable runThread = new Runnable() {
+            @Override
+            public void run() {
+              for (String paragraphId : toBeRunParagraphIds) {
+                note.run(paragraphId, true);
+              }
+            }
+          };
+          executorService.submit(runThread);
+          return null;
+        });
   }
 
   @Override
   public void onParagraphRemove(Paragraph p) {
     try {
       ServiceContext context =
-          new ServiceContext(new AuthenticationInfo(), authorizationService.getOwners(p.getNote().getId()));
+          new ServiceContext(new AuthenticationInfo(),
+              authorizationService.getOwners(p.getNote().getId()));
       getJobManagerService().getNoteJobInfoByUnixTime(System.currentTimeMillis() - 5000, context,
           new JobManagerServiceCallback());
     } catch (IOException e) {
@@ -2135,11 +2234,11 @@ public class NotebookServer implements AngularObjectRegistryListener,
   public void checkpointOutput(String noteId, String paragraphId) {
     try {
       getNotebook().processNote(noteId,
-        note -> {
-          note.getParagraph(paragraphId).checkpointOutput();
-          getNotebook().saveNote(note, AuthenticationInfo.ANONYMOUS);
-          return null;
-        });
+          note -> {
+            note.getParagraph(paragraphId).checkpointOutput();
+            getNotebook().saveNote(note, AuthenticationInfo.ANONYMOUS);
+            return null;
+          });
     } catch (IOException e) {
       LOGGER.warn("Fail to save note: {}", noteId, e);
     }
@@ -2147,7 +2246,8 @@ public class NotebookServer implements AngularObjectRegistryListener,
 
   @Override
   public void noteRunningStatusChange(String noteId, boolean newStatus) {
-    connectionManager.broadcast(noteId, new Message(OP.NOTE_RUNNING_STATUS).put("status", newStatus));
+    connectionManager.broadcast(noteId,
+        new Message(OP.NOTE_RUNNING_STATUS).put("status", newStatus));
   }
 
   private void sendAllAngularObjects(Note note, String user, NotebookSocket conn)
@@ -2199,7 +2299,8 @@ public class NotebookServer implements AngularObjectRegistryListener,
     } else {
       // global scope angular object needs to load and iterate all notes, this is inefficient.
       getNotebook().getNotesInfo().stream().forEach(noteInfo -> {
-        if (angularObject.getNoteId() != null && !noteInfo.getId().equals(angularObject.getNoteId())) {
+        if (angularObject.getNoteId() != null &&
+            !noteInfo.getId().equals(angularObject.getNoteId())) {
           return;
         }
         try {
@@ -2211,9 +2312,11 @@ public class NotebookServer implements AngularObjectRegistryListener,
     }
   }
 
-  private void updateNoteAngularObject(String noteId, AngularObject angularObject, String interpreterGroupId) throws IOException {
+  private void updateNoteAngularObject(String noteId, AngularObject angularObject,
+                                       String interpreterGroupId) throws IOException {
     List<InterpreterSetting> intpSettings = getNotebook().
-      processNote(noteId, note -> note.getBindedInterpreterSettings(new ArrayList<>(authorizationService.getOwners(note.getId()))));
+        processNote(noteId, note -> note.getBindedInterpreterSettings(
+            new ArrayList<>(authorizationService.getOwners(note.getId()))));
     if (intpSettings.isEmpty()) {
       return;
     }
@@ -2232,7 +2335,8 @@ public class NotebookServer implements AngularObjectRegistryListener,
     } else {
       // global scope angular object needs to load and iterate all notes, this is inefficient.
       getNotebook().getNotesInfo().forEach(noteInfo -> {
-        if (angularObject.getNoteId() != null && !noteInfo.getId().equals(angularObject.getNoteId())) {
+        if (angularObject.getNoteId() != null &&
+            !noteInfo.getId().equals(angularObject.getNoteId())) {
           return;
         }
         removeNoteAngularObject(noteInfo.getId(), angularObject, interpreterGroupId);
@@ -2240,7 +2344,8 @@ public class NotebookServer implements AngularObjectRegistryListener,
     }
   }
 
-  private void removeNoteAngularObject(String noteId, AngularObject angularObject, String interpreterGroupId) {
+  private void removeNoteAngularObject(String noteId, AngularObject angularObject,
+                                       String interpreterGroupId) {
     List<String> settingIds =
         getNotebook().getInterpreterSettingManager().getSettingIds();
     for (String id : settingIds) {
@@ -2265,7 +2370,8 @@ public class NotebookServer implements AngularObjectRegistryListener,
     getNotebookService().getEditorSetting(noteId, paragraphText, context,
         new WebSocketServiceCallback<Map<String, Object>>(conn) {
           @Override
-          public void onSuccess(Map<String, Object> settings, ServiceContext context) throws IOException {
+          public void onSuccess(Map<String, Object> settings, ServiceContext context)
+              throws IOException {
             super.onSuccess(settings, context);
             Message resp = new Message(OP.EDITOR_SETTING);
             resp.put("paragraphId", paragraphId);
@@ -2299,29 +2405,30 @@ public class NotebookServer implements AngularObjectRegistryListener,
                                   String interpreterSettingId, Map<String, String> metaInfos) {
     try {
       getNotebook().processNote(noteId,
-        note -> {
-          if (note != null) {
-            Paragraph paragraph = note.getParagraph(paragraphId);
-            if (paragraph != null) {
-              InterpreterSetting setting = getNotebook().getInterpreterSettingManager()
-                  .get(interpreterSettingId);
-              String label = metaInfos.get("label");
-              String tooltip = metaInfos.get("tooltip");
-              List<String> keysToRemove = Arrays.asList("noteId", "paraId", "label", "tooltip");
-              for (String removeKey : keysToRemove) {
-                metaInfos.remove(removeKey);
+          note -> {
+            if (note != null) {
+              Paragraph paragraph = note.getParagraph(paragraphId);
+              if (paragraph != null) {
+                InterpreterSetting setting = getNotebook().getInterpreterSettingManager()
+                    .get(interpreterSettingId);
+                String label = metaInfos.get("label");
+                String tooltip = metaInfos.get("tooltip");
+                List<String> keysToRemove = Arrays.asList("noteId", "paraId", "label", "tooltip");
+                for (String removeKey : keysToRemove) {
+                  metaInfos.remove(removeKey);
+                }
+                paragraph
+                    .updateRuntimeInfos(label, tooltip, metaInfos, setting.getGroup(),
+                        setting.getId());
+                getNotebook().saveNote(note, AuthenticationInfo.ANONYMOUS);
+                connectionManager.broadcast(
+                    note.getId(),
+                    new Message(OP.PARAS_INFO).put("id", paragraphId).put("infos",
+                        paragraph.getRuntimeInfos()));
               }
-              paragraph
-                .updateRuntimeInfos(label, tooltip, metaInfos, setting.getGroup(), setting.getId());
-              getNotebook().saveNote(note, AuthenticationInfo.ANONYMOUS);
-              connectionManager.broadcast(
-                  note.getId(),
-                  new Message(OP.PARAS_INFO).put("id", paragraphId).put("infos",
-                      paragraph.getRuntimeInfos()));
             }
-          }
-          return null;
-        });
+            return null;
+          });
     } catch (IOException e) {
       LOGGER.warn("Fail to call onParaInfosReceived", e);
     }
@@ -2329,18 +2436,18 @@ public class NotebookServer implements AngularObjectRegistryListener,
 
   @Override
   public List<ParagraphInfo> getParagraphList(String user, String noteId)
-      throws IOException, TException, ServiceException{
-      // Check READER permission
-      Set<String> userAndRoles = new HashSet<>();
-      userAndRoles.add(user);
-      boolean isAllowed = authorizationService.isReader(noteId, userAndRoles);
-      Set<String> allowed = authorizationService.getReaders(noteId);
-      if (!isAllowed) {
-        String errorMsg = "Insufficient privileges to READER note. " +
-            "Allowed users or roles: " + allowed;
-        throw new ServiceException(errorMsg);
-      }
-      return getNotebook().processNote(noteId,
+      throws IOException, TException, ServiceException {
+    // Check READER permission
+    Set<String> userAndRoles = new HashSet<>();
+    userAndRoles.add(user);
+    boolean isAllowed = authorizationService.isReader(noteId, userAndRoles);
+    Set<String> allowed = authorizationService.getReaders(noteId);
+    if (!isAllowed) {
+      String errorMsg = "Insufficient privileges to READER note. " +
+          "Allowed users or roles: " + allowed;
+      throw new ServiceException(errorMsg);
+    }
+    return getNotebook().processNote(noteId,
         note -> {
           if (null == note) {
             throw new IOException("Not found this note : " + noteId);
@@ -2412,7 +2519,8 @@ public class NotebookServer implements AngularObjectRegistryListener,
 
   private ServiceContext getServiceContext(TicketContainer.Entry ticketEntry) {
     AuthenticationInfo authInfo =
-        new AuthenticationInfo(ticketEntry.getPrincipal(), ticketEntry.getRoles(), ticketEntry.getTicket());
+        new AuthenticationInfo(ticketEntry.getPrincipal(), ticketEntry.getRoles(),
+            ticketEntry.getTicket());
     Set<String> userAndRoles = new HashSet<>();
     userAndRoles.add(authInfo.getUser());
     userAndRoles.addAll(authInfo.getRoles());

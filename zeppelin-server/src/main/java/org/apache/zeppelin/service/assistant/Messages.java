@@ -14,16 +14,17 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.zeppelin.rest.message;
 
-public class SendMessageRequest {
-  private final String content;
+package org.apache.zeppelin.service.assistant;
 
-  public SendMessageRequest(String content) {
-    this.content = content;
-  }
+import java.util.List;
 
-  public String getContent() {
-    return content;
+public final class Messages {
+  public final List<Message> messages;
+  public final String nextCursor;
+
+  public Messages(List<Message> messages, String nextCursor) {
+    this.messages = messages;
+    this.nextCursor = nextCursor;
   }
 }

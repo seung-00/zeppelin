@@ -17,27 +17,36 @@
 
 package org.apache.zeppelin.service.assistant;
 
-import java.util.Map;
+public interface AssistantEvent {
 
-public class ToolCall {
+  final class TextDelta implements AssistantEvent {
+    public final String delta;
 
-  private String id;
-  private String name;
-  private Map<String, Object> arguments;
-  private ToolResult result;
-
-  ToolCall() {}
-
-  public ToolCall(String id, String name, Map<String, Object> arguments) {
-    this.id = id;
-    this.name = name;
-    this.arguments = arguments;
+    public TextDelta(String delta) {
+      this.delta = delta;
+    }
   }
 
-  public String getId() { return id; }
-  public String getName() { return name; }
-  public Map<String, Object> getArguments() { return arguments; }
-  public ToolResult getResult() { return result; }
+  /** A complete tool call requested by the model. */
+  final class ToolCall implements AssistantEvent {
+    public final String id;
+    public final String name;
+    public final String arguments;  // complete JSON string
 
-  public void setResult(ToolResult result) { this.result = result; }
+    public ToolCall(String id, String name, String arguments) {
+      this.id = id;
+      this.name = name;
+      this.arguments = arguments;
+    }
+  }
+
+  final class Usage implements AssistantEvent {
+    public final int inputTokens;
+    public final int outputTokens;
+
+    public Usage(int inputTokens, int outputTokens) {
+      this.inputTokens = inputTokens;
+      this.outputTokens = outputTokens;
+    }
+  }
 }

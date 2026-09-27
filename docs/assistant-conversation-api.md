@@ -19,10 +19,10 @@ GET /api/notes/{noteId}/conversations
 [
   {
     "id": "conv_abc1234567890def",
-    "note_id": "2F2YS7PCE",
+    "noteId": "2F2YS7PCE",
     "title": "Test conversation",
-    "created_at": "2026-09-26T10:00:00Z",
-    "updated_at": "2026-09-26T10:05:00Z",
+    "createdAt": "2026-09-26T10:00:00Z",
+    "updatedAt": "2026-09-26T10:05:00Z",
     "messages": []
   }
 ]
@@ -51,7 +51,7 @@ Content-Type: application/json
 { "title": "Test conversation" }
 ```
 
-- `title` is required. Missing → **400 Bad Request**.
+- `title` is optional. When omitted, it defaults to `noteId + " " + <timestamp>`.
 
 **201 Created** — returns the created `Conversation`.
 
@@ -74,10 +74,10 @@ DELETE /api/notes/{noteId}/conversations/{conversationId}
 | Field | Type | Description |
 |---|---|---|
 | `id` | string | `conv_` prefix |
-| `note_id` | string | Owning note ID |
+| `noteId` | string | Owning note ID |
 | `title` | string | Conversation title |
-| `created_at` | string (ISO-8601) | Created timestamp |
-| `updated_at` | string (ISO-8601) | Last-updated timestamp |
+| `createdAt` | string (ISO-8601) | Created timestamp |
+| `updatedAt` | string (ISO-8601) | Last-updated timestamp |
 | `messages` | Message[] | Message list (see below) |
 
 ### Message (shape varies by role)
@@ -85,29 +85,31 @@ DELETE /api/notes/{noteId}/conversations/{conversationId}
 Common:
 - `id` (string, `msg_` prefix)
 - `role` (`"user"` \| `"assistant"` \| `"tool"` \| `"system"`)
-- `created_at` (string)
+- `createdAt` (string)
 
 Role-specific fields:
 
 ```jsonc
 // user
-{ "id": "...", "role": "user", "content": "hi", "created_at": "..." }
+{ "id": "...", "role": "user", "content": "hi", "createdAt": "..." }
 
 // assistant
 {
-  "id": "...", "role": "assistant", "created_at": "...",
+  "id": "...", "role": "assistant", "createdAt": "...",
   "content": "Hello.",
-  "tool_calls": [ /* optional */ ]
+  "toolCalls": [ /* optional */ ]
 }
 
 // tool
 {
-  "id": "...", "role": "tool", "created_at": "...",
-  "tool_call_id": "call_xxx",
+  "id": "...", "role": "tool", "createdAt": "...",
+  "toolCallId": "call_xxx",
   "content": "tool execution result"
 }
 ```
 
-For sending messages / streaming, see the separate API at
-`.../conversations/{conversationId}/messages` — examples in
-`docs/notebook-assistant.http`.
+Reading message history is a REST `GET`
+`.../conversations/{conversationId}/messages` (cursor pagination). Sending a
+message and streaming the reply runs over the WebSocket
+(`ASSISTANT_SEND_MESSAGE` / `ASSISTANT_EVENT`) — see
+`docs/notebook-assistant-ssd.md`.

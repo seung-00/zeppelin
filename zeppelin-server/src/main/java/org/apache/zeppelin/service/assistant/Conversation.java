@@ -17,8 +17,6 @@
 
 package org.apache.zeppelin.service.assistant;
 
-import com.google.gson.annotations.SerializedName;
-
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
@@ -26,12 +24,9 @@ import java.util.UUID;
 
 public class Conversation {
   private String id;
-  @SerializedName(value = "note_id", alternate = "noteId")
   private String noteId;
   private String title;
-  @SerializedName(value = "created_at", alternate = "createdAt")
   private String createdAt;
-  @SerializedName(value = "updated_at", alternate = "updatedAt")
   private String updatedAt;
   private List<Message> messages;
 

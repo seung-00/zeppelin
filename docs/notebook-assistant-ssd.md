@@ -11,11 +11,14 @@ http://www.apache.org/licenses/LICENSE-2.0
 ## Overview
 
 Per-notebook AI chat. Each notebook may host multiple conversations; conversation
-data is persisted as JSON inside a hidden paragraph of the same notebook.
+data is persisted separately from notebook data. Each conversation has exactly
+one notebook and one authenticated owner; each notebook and user can have many
+conversations. This document describes the target policy; pending backend changes
+are listed under Implementation Status.
 The LLM is OpenAI, accessed through the **Responses API** so reasoning models can
 call function tools. Conversation CRUD and message history are served over REST;
 sending a message and streaming the assistant's reply run over the existing
-**WebSocket** (`/ws`), broadcast to every viewer of the note.
+**WebSocket** (`/ws`), delivered only to the conversation owner.
 
 ---
 
@@ -28,11 +31,11 @@ Browser (Angular)
 Zeppelin Server (Java)
     ├── AssistantConversationRestApi  (REST: conversation CRUD)
     ├── AssistantMessageRestApi       (REST: message list / pagination)
-    ├── NotebookServer  (WS: ASSISTANT_SEND_MESSAGE → broadcast ASSISTANT_EVENT)
+    ├── NotebookServer  (WS: ASSISTANT_SEND_MESSAGE → owner-only ASSISTANT_EVENT)
     │
     └── NotebookAssistantService      (run loop, per-note locking)
-          ├── ConversationStore       (hidden-paragraph domain façade)
-          ├── ConversationJsonCodec   (wire format)
+          ├── ConversationStore       (separate conversation persistence)
+          ├── ConversationJsonCodec   (conversation JSON format)
           ├── ToolExecutor            (tool registry: name → Tool)
           │     └── ListParagraphsTool
           └── ChatModel               (provider-neutral streaming seam)
@@ -45,12 +48,11 @@ OpenAI
     └── function tool: list_paragraphs
     │
     ▼
-Note (.zpln file)
-    ├── paragraph (visible) — user code/analysis
-    ├── paragraph (visible) — ...
-    └── paragraph (hidden)  — assistant conversation storage
-        config: { editorHide: true, tableHide: true, enabled: false, notebookAssistant: true }
-        text: { "conversations": [...] }
+Notebook data (.zpln file)
+    └── paragraphs — user code/analysis
+
+Conversation storage (separate from notebook data)
+    └── conversations with noteId, ownerId, messages
 ```
 
 The only OpenAI-coupled file is `OpenAiChatModel`. Everything else talks to the
@@ -61,10 +63,12 @@ so swapping providers means adding one adapter, not touching the service.
 
 ## Data Model
 
-### Hidden paragraph payload
+### Conversation payload
 
-One hidden paragraph per notebook. Its `text` field carries the JSON below.
-All field names are camelCase.
+Conversations are stored outside the notebook payload and reference it by
+`noteId`. They are not included in notebook exports or clones. The JSON below
+illustrates conversation data, not a hidden paragraph or a required physical
+storage layout. All field names are camelCase.
 
 ```json
 {
@@ -72,6 +76,7 @@ All field names are camelCase.
     {
       "id": "conv_01JXXX",
       "noteId": "2F2YS7PCE",
+      "ownerId": "alice",
       "title": "2F2YS7PCE 2026-09-22T10:00:00Z",
       "createdAt": "2026-09-22T10:00:00Z",
       "updatedAt": "2026-09-22T10:05:00Z",
@@ -118,18 +123,27 @@ All field names are camelCase.
 `ToolResult` is `{ "value": ... }` on success or `{ "error": "..." }` on failure
 (`error == null` means success). There is no `status` field.
 
-### Marker paragraph identification
+### Ownership and access policy
 
-The hidden paragraph is identified by a marker in its `config`:
-
-```json
-{
-  "editorHide": true,
-  "tableHide": true,
-  "enabled": false,
-  "notebookAssistant": true
-}
-```
+- Any authenticated user with notebook read access can create a conversation;
+  notebook write permission is not required. Anonymous creation is rejected.
+- The server sets the required `ownerId` from the authenticated identity, never
+  from a client-supplied owner or a role. Ownership does not change.
+- All users with notebook read access can list all conversation summaries.
+  Each summary contains only `id`, `noteId`, `ownerId`, `title`, `createdAt`, and
+  `updatedAt`; messages, tool results, and message previews are excluded.
+- Only the owner can retrieve content/history, send messages, delete a
+  conversation, or change its title when title editing is supported. These
+  operations also require current notebook read access and a matching `noteId`.
+- Tools execute under the requesting user's existing notebook permissions.
+  Owning a conversation does not grant notebook write or run permission.
+- REST and WebSocket enforce these checks on the server. Run events, including
+  tool results and failures, are not broadcast to other notebook viewers.
+- The UI offers an easy new-conversation action, identifies the owner in the
+  shared list, and prevents opening or editing another user's conversation.
+  Titles are shared metadata; their visibility should be clear to users.
+- Notebook deletion cleanup and migration of legacy conversations without an
+  owner are outside the current scope. New conversations always require an owner.
 
 ---
 
@@ -139,16 +153,16 @@ The hidden paragraph is identified by a marker in its `config`:
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `POST` | `/api/notes/{noteId}/conversations` | Create a conversation (title optional; defaults to `noteId + " " + now`) |
-| `GET` | `/api/notes/{noteId}/conversations` | List conversations |
-| `GET` | `/api/notes/{noteId}/conversations/{conversationId}` | Get a conversation (includes messages) |
-| `DELETE` | `/api/notes/{noteId}/conversations/{conversationId}` | Delete a conversation |
+| `POST` | `/api/notes/{noteId}/conversations` | Create a conversation as the authenticated owner; notebook read access suffices (title optional; defaults to `noteId + " " + now`) |
+| `GET` | `/api/notes/{noteId}/conversations` | List metadata summaries for all conversations in the notebook; requires notebook read access |
+| `GET` | `/api/notes/{noteId}/conversations/{conversationId}` | Get a conversation with messages; owner and notebook read access required |
+| `DELETE` | `/api/notes/{noteId}/conversations/{conversationId}` | Delete a conversation; owner and notebook read access required |
 
 ### REST — Messages
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/api/notes/{noteId}/conversations/{conversationId}/messages?cursor=&limit=` | List messages, latest-first, cursor pagination |
+| `GET` | `/api/notes/{noteId}/conversations/{conversationId}/messages?cursor=&limit=` | List messages, latest-first, cursor pagination; owner and notebook read access required |
 
 Sending a message is **not** a REST call — see WebSocket below.
 
@@ -158,7 +172,7 @@ Inbound (client → server):
 
 | OP | Payload | Description |
 |----|---------|-------------|
-| `ASSISTANT_SEND_MESSAGE` | `{ noteId, conversationId, content }` | Send a user message and start a run |
+| `ASSISTANT_SEND_MESSAGE` | `{ noteId, conversationId, content }` | Send a user message and start a run; authenticated owner and notebook read access required |
 
 Outbound (server → client): a single OP carries all run events, discriminated by `type`.
 
@@ -173,9 +187,10 @@ Outbound (server → client): a single OP carries all run events, discriminated 
 }
 ```
 
-`ASSISTANT_EVENT` is **broadcast to every socket subscribed to the note** (the
-same channel notebook edits use), so all viewers see the assistant reply live.
-Clients route by `payload.conversationId`.
+`ASSISTANT_EVENT` is delivered only to the conversation owner through an
+owner-authorized connection. It must not use the notebook-wide broadcast channel.
+Rejected sends return a failure only to the requesting connection, without
+conversation content. Clients route events by `data.conversationId`.
 
 ---
 
@@ -203,22 +218,22 @@ the same way.
 ### 1. Create conversation (REST)
 
 Read-modify-write is serialized by a per-note in-memory lock (`noteLocks`) held
-by the service. Persistence goes through `notebook.processNote(noteId, ...)` +
-`notebook.saveNote(note, subject)`.
+by the service. Persistence goes through the separate `ConversationStore` and
+does not modify or save notebook paragraphs.
 
 ```mermaid
 sequenceDiagram
     participant U as User
     participant C as Client
     participant S as Zeppelin Server
-    participant N as Note
+    participant D as Conversation Store
 
     U->>C: Start a new conversation
     C->>S: POST conversations
+    S->>S: check authentication and notebook read access
+    S->>S: assign ownerId from authenticated user
     S->>S: acquire per-note lock
-    S->>N: processNote - attach ConversationStore
-    S->>N: store add then flush
-    S->>N: saveNote
+    S->>D: add conversation and persist
     S->>S: release per-note lock
     S-->>C: created conversation JSON
     C-->>U: Show conversation view
@@ -229,40 +244,42 @@ sequenceDiagram
 `NotebookServer.sendAssistantMessage` submits the run to a dedicated
 `assistantExecutor` (separate from the paragraph-run pool, so the WS receive
 thread is never blocked and assistant load cannot starve paragraph execution)
-and hands the service an `AssistantEventListener` that broadcasts each event as
-an `ASSISTANT_EVENT` message.
+and hands the service an `AssistantEventListener` that delivers each event only
+to the owner as an `ASSISTANT_EVENT` message.
 
 ```mermaid
 sequenceDiagram
     participant U as User
-    participant C as Client plus other note viewers
+    participant C as Owner Client
     participant S as Zeppelin Server
     participant O as OpenAI Responses API
     participant N as Note
+    participant D as Conversation Store
 
     U->>C: Type a message
     C->>S: WS ASSISTANT_SEND_MESSAGE noteId, conversationId, content
     S->>S: submit run to assistantExecutor
-    S->>N: mutateStore - append user message, flush, saveNote
-    S-->>C: broadcast ASSISTANT_EVENT type run.started
+    S->>S: check authentication, notebook read access, ownership
+    S->>D: append user message and persist
+    S-->>C: owner-only ASSISTANT_EVENT type run.started
 
     Note over S,O: Build input - instructions, history, tool specs
     S->>O: responses.createStreaming with tools
 
     O-->>S: stream - function call list_paragraphs
-    S-->>C: broadcast type tool_call.started
-    S->>N: ToolExecutor.callTool then NotebookService
-    S->>N: mutateStore - append assistant plus tool result, flush, saveNote
-    S-->>C: broadcast type tool_call.done
+    S-->>C: owner-only type tool_call.started
+    S->>N: ToolExecutor.callTool with requesting user permissions
+    S->>D: append assistant plus tool result and persist
+    S-->>C: owner-only type tool_call.done
 
     Note over S,O: loop with tool result appended
     O-->>S: stream - output text deltas
-    S-->>C: broadcast type message.delta repeated
+    S-->>C: owner-only type message.delta repeated
 
     O-->>S: stream - response.completed with usage
-    S->>N: mutateStore - append assistant message, flush, saveNote
-    S-->>C: broadcast type message.done
-    S-->>C: broadcast type run.completed
+    S->>D: append assistant message and persist
+    S-->>C: owner-only type message.done
+    S-->>C: owner-only type run.completed
 ```
 
 The loop runs up to 10 iterations; if the model keeps requesting tools past that,
@@ -274,10 +291,12 @@ the service raises `IllegalStateException` and emits `run.failed`.
 sequenceDiagram
     participant C as Client
     participant S as Zeppelin Server
-    participant N as Note
+    participant D as Conversation Store
 
     C->>S: GET conversation by id
-    S->>N: readStore - attach ConversationStore then find
+    S->>S: check authentication and notebook read access
+    S->>D: find conversation for noteId
+    S->>S: check ownerId against authenticated user
     S-->>C: conversation JSON with messages
 ```
 
@@ -328,7 +347,8 @@ they stay in English.
 
 ### `list_paragraphs`
 
-Return the list of visible (non-marker) paragraphs in the notebook.
+Return the list of visible paragraphs in the notebook under the requesting
+user's notebook read permission.
 
 ```json
 {
@@ -348,7 +368,7 @@ Result (`ToolResult.value`):
 ]
 ```
 
-The hidden marker paragraph is excluded from the result.
+Conversation data is stored separately and is never part of the paragraph result.
 
 ---
 
@@ -398,7 +418,8 @@ the frontend.
 | Feature disabled / API key not configured | `run.failed` (during a run); REST CRUD → 503 |
 | Note not found | `run.failed`; REST → 404 |
 | Conversation not found | `run.failed`; REST → 404 |
-| Missing read/write permission | `run.failed`; REST → 403 |
+| Anonymous user, missing notebook read access, or non-owner content/mutation request | `run.failed` to requester only; REST → 403 |
+| Tool lacks required notebook write/run permission | Tool error; must not perform the operation |
 | OpenAI / tool / save error mid-run | `run.failed` (code `internal_error`) |
 | Tool loop exceeds 10 iterations | `run.failed` |
 
@@ -412,24 +433,25 @@ failure is surfaced as a `run.failed` event carrying `{ code, message }`.
 
 | Component | Status |
 |-----------|--------|
-| Conversation CRUD (list/create/get/delete) — REST | Done |
-| `GET .../messages` (cursor pagination) — REST | Done |
-| Hidden paragraph storage (`ConversationStore` + `ConversationJsonCodec`) | Done |
+| Conversation CRUD (list/create/get/delete) — REST | Existing; metadata-only list and owner enforcement pending |
+| `GET .../messages` (cursor pagination) — REST | Existing; owner enforcement pending |
+| Separate conversation storage (`ConversationStore` + `ConversationJsonCodec`) | Pending; replace existing hidden-paragraph storage |
+| Required server-assigned `ownerId`; authenticated creation with notebook read access | Pending |
 | Per-note lock (`noteLocks`) | Done |
 | `Tool` / `ToolExecutor` / `ListParagraphsTool` | Done |
 | `ChatModel` seam + `OpenAiChatModel` (Responses API, streaming) | Done |
 | `sendMessage` run loop + tool dispatch | Done |
-| WebSocket streaming (`ASSISTANT_SEND_MESSAGE` / `ASSISTANT_EVENT`, broadcast) | Done (backend) |
+| WebSocket streaming (`ASSISTANT_SEND_MESSAGE` / `ASSISTANT_EVENT`, owner only) | Existing streaming; replace notebook-wide broadcast and enforce ownership |
 | Angular UI + WS OP enum sync | Out of scope (delivered separately) |
 
 ## Out of Scope
 
+- Conversation cleanup when a notebook is deleted
+- Migration of legacy conversations without owner information
 - Conversation title editing (may be added later)
 - Additional paragraph tools (get/add/update/delete, run) — only `list_paragraphs` today
 - Bidirectional run control over WS (stop / interrupt / steer)
 - Concurrency within a single conversation (concurrent runs on the same
-  conversation can interleave history — a pre-existing multi-user concern)
+  conversation can interleave history, including sends from multiple owner tabs)
 - LLM providers other than OpenAI (the `ChatModel` seam is ready, but only the
   OpenAI adapter exists)
-```
-

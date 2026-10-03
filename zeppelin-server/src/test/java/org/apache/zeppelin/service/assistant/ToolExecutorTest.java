@@ -73,19 +73,22 @@ class ToolExecutorTest {
   }
 
   @Test
-  void listParagraphsExcludesAssistantMarker() {
+  void listParagraphsReturnsNotebookParagraphs() {
     Paragraph visible = note.addNewParagraph(AuthenticationInfo.ANONYMOUS);
     visible.setText("%md hello");
-    Paragraph marker = note.addNewParagraph(AuthenticationInfo.ANONYMOUS);
-    marker.setConfig(Map.of("notebookAssistant", true));
+    Paragraph second = note.addNewParagraph(AuthenticationInfo.ANONYMOUS);
+    second.setText("%python print(1)");
 
     ToolResult result = executor.callTool("note", "list_paragraphs", Map.of(), ctx);
 
     assertNull(result.error);
     @SuppressWarnings("unchecked")
     List<Map<String, Object>> paragraphs = (List<Map<String, Object>>) result.value;
-    assertEquals(1, paragraphs.size());
+    assertEquals(2, paragraphs.size());
     assertEquals(visible.getId(), paragraphs.get(0).get("id"));
+    assertEquals(second.getId(), paragraphs.get(1).get("id"));
+    assertEquals("python", paragraphs.get(1).get("interpreter"));
+    assertEquals(1, paragraphs.get(1).get("index"));
   }
 
   @Test

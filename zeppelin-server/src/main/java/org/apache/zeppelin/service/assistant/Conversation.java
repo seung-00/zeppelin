@@ -18,13 +18,20 @@
 package org.apache.zeppelin.service.assistant;
 
 import java.time.Instant;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 
 public class Conversation {
+
+  // yy-MM-dd HH:mm, e.g. "26-10-02 14:30" — minute precision makes default titles rarely collide.
+  private static final DateTimeFormatter TITLE_TIME = DateTimeFormatter.ofPattern("yy-MM-dd HH:mm");
+
   private String id;
   private String noteId;
+  private String ownerId;
   private String title;
   private String createdAt;
   private String updatedAt;
@@ -34,11 +41,12 @@ public class Conversation {
     this.messages = new ArrayList<>();
   }
 
-  public static Conversation create(String noteId, String title) {
+  public static Conversation create(String noteId, String title, String ownerId) {
     Conversation c = new Conversation();
     c.id = "conv_" + UUID.randomUUID().toString().replace("-", "").substring(0, 16);
     c.noteId = noteId;
-    c.title = title != null ? title : "New Conversation";
+    c.ownerId = ownerId;
+    c.title = title != null ? title : LocalDateTime.now().format(TITLE_TIME);
     c.createdAt = Instant.now().toString();
     c.updatedAt = c.createdAt;
     return c;
@@ -46,10 +54,20 @@ public class Conversation {
 
   public String getId() { return id; }
   public String getNoteId() { return noteId; }
+  public String getOwnerId() { return ownerId; }
   public String getTitle() { return title; }
   public String getCreatedAt() { return createdAt; }
   public String getUpdatedAt() { return updatedAt; }
   public List<Message> getMessages() { return messages; }
+
+  public boolean isOwner(String user) {
+    return ownerId.equals(user);
+  }
+
+  public void setTitle(String title) {
+    this.title = title;
+    touch();
+  }
 
   public void addMessage(Message message) {
     messages.add(message);

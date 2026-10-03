@@ -33,8 +33,9 @@ Zeppelin Server (Java)
     ├── AssistantMessageRestApi       (REST: message list / pagination)
     ├── NotebookServer  (WS: ASSISTANT_SEND_MESSAGE → owner-only ASSISTANT_EVENT)
     │
-    └── NotebookAssistantService      (run loop, per-note locking)
-          ├── ConversationStore       (separate conversation persistence)
+    └── NotebookAssistantService      (run loop, ownership and run-state checks)
+          ├── ConversationRepository  (storage interface)
+          │   └── FileConversationRepository (default JSON-file backend)
           ├── ConversationJsonCodec   (conversation JSON format)
           ├── ToolExecutor            (tool registry: name → Tool)
           │     └── ListParagraphsTool
@@ -67,54 +68,57 @@ so swapping providers means adding one adapter, not touching the service.
 
 Conversations are stored outside the notebook payload and reference it by
 `noteId`. They are not included in notebook exports or clones. The JSON below
-illustrates conversation data, not a hidden paragraph or a required physical
-storage layout. All field names are camelCase.
+illustrates a stored conversation. All field names are camelCase.
 
 ```json
 {
-  "conversations": [
+  "id": "conv_01JXXX",
+  "noteId": "2F2YS7PCE",
+  "ownerId": "alice",
+  "title": "2F2YS7PCE 2026-09-22T10:00:00Z",
+  "createdAt": "2026-09-22T10:00:00Z",
+  "updatedAt": "2026-09-22T10:05:00Z",
+  "messages": [
     {
-      "id": "conv_01JXXX",
-      "noteId": "2F2YS7PCE",
-      "ownerId": "alice",
-      "title": "2F2YS7PCE 2026-09-22T10:00:00Z",
-      "createdAt": "2026-09-22T10:00:00Z",
-      "updatedAt": "2026-09-22T10:05:00Z",
-      "messages": [
+      "id": "msg_01JXXX",
+      "role": "user",
+      "content": "Show me the paragraphs",
+      "createdAt": "2026-09-22T10:00:00Z"
+    },
+    {
+      "id": "msg_02JXXX",
+      "role": "assistant",
+      "content": "",
+      "toolCalls": [
         {
-          "id": "msg_01JXXX",
-          "role": "user",
-          "content": "Show me the paragraphs",
-          "createdAt": "2026-09-22T10:00:00Z"
-        },
-        {
-          "id": "msg_02JXXX",
-          "role": "assistant",
-          "content": "",
-          "toolCalls": [
-            {
-              "id": "call_abc123",
-              "name": "list_paragraphs",
-              "arguments": {},
-              "result": { "value": [ { "id": "20150212-145404", "title": "Load", "index": 0 } ] }
-            }
-          ],
-          "createdAt": "2026-09-22T10:00:05Z"
-        },
-        {
-          "id": "msg_03JXXX",
-          "role": "tool",
-          "toolCallId": "call_abc123",
-          "content": "{\"value\":[...]}",
-          "createdAt": "2026-09-22T10:00:05Z"
-        },
-        {
-          "id": "msg_04JXXX",
-          "role": "assistant",
-          "content": "There is one paragraph: \"Load\".",
-          "createdAt": "2026-09-22T10:00:06Z"
+          "id": "call_abc123",
+          "name": "list_paragraphs",
+          "arguments": {},
+          "result": {
+            "value": [
+              {
+                "id": "20150212-145404",
+                "title": "Load",
+                "index": 0
+              }
+            ]
+          }
         }
-      ]
+      ],
+      "createdAt": "2026-09-22T10:00:05Z"
+    },
+    {
+      "id": "msg_03JXXX",
+      "role": "tool",
+      "toolCallId": "call_abc123",
+      "content": "{\"value\":[...]}",
+      "createdAt": "2026-09-22T10:00:05Z"
+    },
+    {
+      "id": "msg_04JXXX",
+      "role": "assistant",
+      "content": "There is one paragraph: \"Load\".",
+      "createdAt": "2026-09-22T10:00:06Z"
     }
   ]
 }
@@ -132,9 +136,11 @@ storage layout. All field names are camelCase.
 - All users with notebook read access can list all conversation summaries.
   Each summary contains only `id`, `noteId`, `ownerId`, `title`, `createdAt`, and
   `updatedAt`; messages, tool results, and message previews are excluded.
-- Only the owner can retrieve content/history, send messages, delete a
-  conversation, or change its title when title editing is supported. These
-  operations also require current notebook read access and a matching `noteId`.
+- Any user with notebook read access can retrieve a conversation's content and
+  message history (the shared list extends to the content), with a matching `noteId`.
+- Only the owner can send messages, delete a conversation, or change its title.
+  These operations also require current notebook read access and a matching `noteId`.
+  A conversation with an active run rejects delete and title changes until the run ends.
 - Tools execute under the requesting user's existing notebook permissions.
   Owning a conversation does not grant notebook write or run permission.
 - REST and WebSocket enforce these checks on the server. Run events, including
@@ -142,8 +148,7 @@ storage layout. All field names are camelCase.
 - The UI offers an easy new-conversation action, identifies the owner in the
   shared list, and prevents opening or editing another user's conversation.
   Titles are shared metadata; their visibility should be clear to users.
-- Notebook deletion cleanup and migration of legacy conversations without an
-  owner are outside the current scope. New conversations always require an owner.
+- Notebook deletion cleanup is outside the current scope. Conversations require an owner.
 
 ---
 
@@ -153,16 +158,17 @@ storage layout. All field names are camelCase.
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `POST` | `/api/notes/{noteId}/conversations` | Create a conversation as the authenticated owner; notebook read access suffices (title optional; defaults to `noteId + " " + now`) |
+| `POST` | `/api/notes/{noteId}/conversations` | Create a conversation as the authenticated owner; notebook read access suffices (title optional; defaults to the creation time `yy-MM-dd HH:mm`). Anonymous users are rejected |
 | `GET` | `/api/notes/{noteId}/conversations` | List metadata summaries for all conversations in the notebook; requires notebook read access |
-| `GET` | `/api/notes/{noteId}/conversations/{conversationId}` | Get a conversation with messages; owner and notebook read access required |
+| `GET` | `/api/notes/{noteId}/conversations/{conversationId}` | Get a conversation with messages; notebook read access required |
+| `PATCH` | `/api/notes/{noteId}/conversations/{conversationId}` | Change the title (`{ "title": ... }`); owner and notebook read access required |
 | `DELETE` | `/api/notes/{noteId}/conversations/{conversationId}` | Delete a conversation; owner and notebook read access required |
 
 ### REST — Messages
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/api/notes/{noteId}/conversations/{conversationId}/messages?cursor=&limit=` | List messages, latest-first, cursor pagination; owner and notebook read access required |
+| `GET` | `/api/notes/{noteId}/conversations/{conversationId}/messages?cursor=&limit=` | List messages, latest-first, cursor pagination; notebook read access required |
 
 Sending a message is **not** a REST call — see WebSocket below.
 
@@ -217,8 +223,33 @@ the same way.
 
 ### 1. Create conversation (REST)
 
-Read-modify-write is serialized by a per-note in-memory lock (`noteLocks`) held
-by the service. Persistence goes through the separate `ConversationStore` and
+Conversation storage operations run inside `Notebook.processNote` callbacks:
+missing notes are rejected there, and the note remains protected from cache
+eviction while storage is accessed. The service depends on the injected
+`ConversationRepository` interface, which provides list, find, create, update,
+and delete. The service reserves a conversation slot before entity lookup and holds it
+through mutation and persistence. It calls `repository.update(entity, change)` to apply
+a domain change and persist the entity. A missing entity is not changed or recreated.
+HK2 binds `FileConversationRepository` by default. Each conversation is stored as
+one JSON object in `{assistantDir}/{noteId}/{conversationId}.json`, written using
+atomic file replacement. Listing reads the note directory and sorts conversations
+by creation time and ID; no shared index file is maintained. The repository
+provides no locking; updates and deletion go through the singleton service.
+Creation writes an independent file with a generated ID and needs no conversation
+slot.
+The service uses one concurrent `busyConversations` set for title updates,
+deletion, and message runs. Each operation atomically adds the conversation ID
+before reading the entity and removes it in `finally`. A message run holds its
+slot for the entire run, including model calls and message persistence. Internal
+run persistence uses that existing slot. Creation writes a new independent file
+and does not reserve a slot. A conflicting operation returns REST 409 immediately
+(or WebSocket `run.failed` with `conflict`) with an empty message; it never waits.
+Different conversations proceed independently. Coordination is within one service
+instance; multiple servers would need shared coordination. The set tracks only
+currently active operations and releases entries on success or failure.
+Run persistence applies new messages to the entity loaded after reserving the slot;
+it does not reload the conversation or copy its message history. An assistant tool
+turn and its tool results are persisted together. Conversation storage
 does not modify or save notebook paragraphs.
 
 ```mermaid
@@ -232,9 +263,9 @@ sequenceDiagram
     C->>S: POST conversations
     S->>S: check authentication and notebook read access
     S->>S: assign ownerId from authenticated user
-    S->>S: acquire per-note lock
+    S->>S: acquire note stripe lock
     S->>D: add conversation and persist
-    S->>S: release per-note lock
+    S->>S: release note stripe lock
     S-->>C: created conversation JSON
     C-->>U: Show conversation view
 ```
@@ -296,7 +327,7 @@ sequenceDiagram
     C->>S: GET conversation by id
     S->>S: check authentication and notebook read access
     S->>D: find conversation for noteId
-    S->>S: check ownerId against authenticated user
+    S->>S: verify path noteId matches conversation noteId
     S-->>C: conversation JSON with messages
 ```
 
@@ -418,7 +449,8 @@ the frontend.
 | Feature disabled / API key not configured | `run.failed` (during a run); REST CRUD → 503 |
 | Note not found | `run.failed`; REST → 404 |
 | Conversation not found | `run.failed`; REST → 404 |
-| Anonymous user, missing notebook read access, or non-owner content/mutation request | `run.failed` to requester only; REST → 403 |
+| Anonymous create, missing notebook read access, or non-owner mutation (send/delete/title) | `run.failed` to requester only; REST → 403 |
+| Delete or title change while a run is in progress | REST → 409 |
 | Tool lacks required notebook write/run permission | Tool error; must not perform the operation |
 | OpenAI / tool / save error mid-run | `run.failed` (code `internal_error`) |
 | Tool loop exceeds 10 iterations | `run.failed` |
@@ -433,25 +465,23 @@ failure is surfaced as a `run.failed` event carrying `{ code, message }`.
 
 | Component | Status |
 |-----------|--------|
-| Conversation CRUD (list/create/get/delete) — REST | Existing; metadata-only list and owner enforcement pending |
-| `GET .../messages` (cursor pagination) — REST | Existing; owner enforcement pending |
-| Separate conversation storage (`ConversationStore` + `ConversationJsonCodec`) | Pending; replace existing hidden-paragraph storage |
-| Required server-assigned `ownerId`; authenticated creation with notebook read access | Pending |
-| Per-note lock (`noteLocks`) | Done |
+| Conversation CRUD (list/create/get/delete/title) — REST | Done; metadata-only list, owner enforcement on mutations |
+| `GET .../messages` (cursor pagination) — REST | Done; notebook read access |
+| Separate conversation storage (per-conversation JSON files via `FileConversationRepository` + `ConversationJsonCodec`) | Done |
+| Required server-assigned `ownerId`; authenticated creation with notebook read access | Done |
+| Shared conversation mutation/run guard (`busyConversations`) | Done (in-memory, single-server) |
 | `Tool` / `ToolExecutor` / `ListParagraphsTool` | Done |
 | `ChatModel` seam + `OpenAiChatModel` (Responses API, streaming) | Done |
 | `sendMessage` run loop + tool dispatch | Done |
-| WebSocket streaming (`ASSISTANT_SEND_MESSAGE` / `ASSISTANT_EVENT`, owner only) | Existing streaming; replace notebook-wide broadcast and enforce ownership |
+| WebSocket streaming (`ASSISTANT_SEND_MESSAGE` / `ASSISTANT_EVENT`, delivered to requesting owner connection) | Done; no longer notebook-wide broadcast |
 | Angular UI + WS OP enum sync | Out of scope (delivered separately) |
 
 ## Out of Scope
 
 - Conversation cleanup when a notebook is deleted
-- Migration of legacy conversations without owner information
-- Conversation title editing (may be added later)
+- Shared storage across multiple servers (the `busyConversations` guard
+  are in-memory, single-server; a distributed lock would be required)
 - Additional paragraph tools (get/add/update/delete, run) — only `list_paragraphs` today
 - Bidirectional run control over WS (stop / interrupt / steer)
-- Concurrency within a single conversation (concurrent runs on the same
-  conversation can interleave history, including sends from multiple owner tabs)
 - LLM providers other than OpenAI (the `ChatModel` seam is ready, but only the
   OpenAI adapter exists)

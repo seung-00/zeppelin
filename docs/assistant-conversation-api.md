@@ -1,3 +1,11 @@
+<!--
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+http://www.apache.org/licenses/LICENSE-2.0
+-->
+
 # Assistant Conversation API
 
 Base path: `/api/notes/{noteId}/conversations`
@@ -13,22 +21,21 @@ The examples below show only the `body` part.
 GET /api/notes/{noteId}/conversations
 ```
 
-**200 OK**
+Requires notebook read access. **200 OK** — metadata-only summaries; `messages` are
+**not** included (use Get or the messages endpoint to read content).
 
 ```json
 [
   {
     "id": "conv_abc1234567890def",
     "noteId": "2F2YS7PCE",
+    "ownerId": "alice",
     "title": "Test conversation",
     "createdAt": "2026-09-26T10:00:00Z",
-    "updatedAt": "2026-09-26T10:05:00Z",
-    "messages": []
+    "updatedAt": "2026-09-26T10:05:00Z"
   }
 ]
 ```
-
-> `messages` is included even in list responses. Ignore it on the frontend if not needed.
 
 ---
 
@@ -38,7 +45,8 @@ GET /api/notes/{noteId}/conversations
 GET /api/notes/{noteId}/conversations/{conversationId}
 ```
 
-**200 OK** — see the `Conversation` schema below.
+Requires notebook read access (not restricted to the owner). **200 OK** — see the
+`ConversationResponse` schema below.
 
 ---
 
@@ -51,17 +59,37 @@ Content-Type: application/json
 { "title": "Test conversation" }
 ```
 
-- `title` is optional. When omitted, it defaults to `noteId + " " + <timestamp>`.
+- `title` is optional. When omitted, it defaults to the creation time (`yy-MM-dd HH:mm`).
+- Requires notebook read access and an authenticated user; anonymous requests are
+  rejected (403). The server assigns `ownerId` from the authenticated identity.
 
-**201 Created** — returns the created `Conversation`.
+**201 Created** — returns a `ConversationMetadata` without messages.
 
 ---
 
-## 4. Delete
+## 4. Update title
+
+```
+PATCH /api/notes/{noteId}/conversations/{conversationId}
+Content-Type: application/json
+
+{ "title": "Renamed" }
+```
+
+- Owner only (403 otherwise). `title` is required (400 if missing/blank).
+- Returns 409 while a run is in progress on the conversation.
+
+**200 OK** — returns the updated `ConversationMetadata` without messages.
+
+---
+
+## 5. Delete
 
 ```
 DELETE /api/notes/{noteId}/conversations/{conversationId}
 ```
+
+- Owner only (403 otherwise). Returns 409 while a run is in progress.
 
 **204 No Content**
 
@@ -69,16 +97,21 @@ DELETE /api/notes/{noteId}/conversations/{conversationId}
 
 ## Schema
 
-### Conversation
+### ConversationMetadata
 
 | Field | Type | Description |
 |---|---|---|
 | `id` | string | `conv_` prefix |
 | `noteId` | string | Owning note ID |
+| `ownerId` | string | Authenticated user who created it (server-assigned) |
 | `title` | string | Conversation title |
 | `createdAt` | string (ISO-8601) | Created timestamp |
 | `updatedAt` | string (ISO-8601) | Last-updated timestamp |
-| `messages` | Message[] | Message list (see below) |
+
+### ConversationResponse
+
+Includes all `ConversationMetadata` fields plus `messages` (`Message[]`, see below).
+Only the Get endpoint returns this detailed response.
 
 ### Message (shape varies by role)
 

@@ -58,24 +58,18 @@ public class ListParagraphsTool implements Tool {
       List<Map<String, Object>> result = new ArrayList<>();
       for (int i = 0; i < note.getParagraphCount(); i++) {
         Paragraph p = note.getParagraph(i);
-        if (!isAssistantMarker(p)) {
-          Map<String, Object> info = new HashMap<>();
-          info.put("id", p.getId());
-          info.put("title", p.getTitle());
-          String text = p.getText();
-          info.put("text", text);
-          info.put("interpreter", text != null && text.startsWith("%")
-              ? text.substring(1).split("\\s+", 2)[0] : "");
-          info.put("index", i);
-          result.add(info);
-        }
+        Map<String, Object> info = new HashMap<>();
+        info.put("id", p.getId());
+        info.put("title", p.getTitle());
+        String text = p.getText();
+        info.put("text", text);
+        info.put("interpreter", text != null && text.startsWith("%")
+            ? text.substring(1).split("\\s+", 2)[0] : "");
+        info.put("index", i);
+        result.add(info);
       }
       return result;
     });
-  }
-
-  static boolean isAssistantMarker(Paragraph p) {
-    return Boolean.TRUE.equals(p.getConfig().get(ConversationStore.PARAGRAPH_CONFIG_KEY));
   }
 
   private static <T> SimpleServiceCallback<T> callback() {

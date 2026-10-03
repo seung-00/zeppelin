@@ -150,9 +150,11 @@ public class NotebookServer implements AngularObjectRegistryListener,
 
   private final ExecutorService executorService = Executors.newFixedThreadPool(10);
 
+  // Daemon threads so an in-flight assistant run never blocks JVM shutdown (normal shutdown
+  // does not call System.exit). Conversation writes are atomic, so abrupt termination is safe.
   private final ExecutorService assistantExecutor = Executors.newFixedThreadPool(
       10,
-      new ThreadFactoryBuilder().setNameFormat("assistant-run-%d").build()
+      new ThreadFactoryBuilder().setNameFormat("assistant-run-%d").setDaemon(true).build()
   );
 
   // Package-private (not private) so NotebookServerHeartbeatTest can observe scheduler
@@ -1270,11 +1272,18 @@ public class NotebookServer implements AngularObjectRegistryListener,
     String noteId = (String) fromMessage.get("noteId");
     String conversationId = (String) fromMessage.get("conversationId");
     String content = (String) fromMessage.get("content");
-    AssistantEventListener sink = (type, payload) ->
-        connectionManager.broadcast(noteId, new Message(OP.ASSISTANT_EVENT)
+    // Deliver run events only to the requesting (owner) connection, never broadcast to
+    // other notebook viewers. The service verifies ownership before any run starts.
+    AssistantEventListener sink = (type, payload) -> {
+      try {
+        conn.send(serializeMessage(new Message(OP.ASSISTANT_EVENT)
             .put("conversationId", conversationId)
             .put("type", type.wireName)
-            .put("payload", payload));
+            .put("payload", payload)));
+      } catch (IOException e) {
+        LOGGER.warn("Failed to send assistant event to connection", e);
+      }
+    };
     assistantExecutor.submit(
         () -> getNotebookAssistantService().sendMessage(
             noteId,

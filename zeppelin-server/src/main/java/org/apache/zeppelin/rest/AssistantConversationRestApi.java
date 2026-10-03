@@ -17,10 +17,14 @@
 
 package org.apache.zeppelin.rest;
 
+import com.google.gson.JsonSyntaxException;
+
 import jakarta.inject.Inject;
 import jakarta.inject.Singleton;
+import jakarta.ws.rs.BadRequestException;
 import jakarta.ws.rs.DELETE;
 import jakarta.ws.rs.GET;
+import jakarta.ws.rs.PATCH;
 import jakarta.ws.rs.POST;
 import jakarta.ws.rs.Path;
 import jakarta.ws.rs.PathParam;
@@ -28,11 +32,13 @@ import jakarta.ws.rs.Produces;
 import jakarta.ws.rs.core.Response;
 
 import java.io.IOException;
-import java.time.Instant;
 import java.util.Optional;
+import java.util.stream.Collectors;
 
 import org.apache.zeppelin.annotation.ZeppelinApi;
 import org.apache.zeppelin.rest.message.CreateConversationRequest;
+import org.apache.zeppelin.rest.message.ConversationMetadata;
+import org.apache.zeppelin.rest.message.ConversationResponse;
 import org.apache.zeppelin.server.JsonResponse;
 import org.apache.zeppelin.service.AuthenticationService;
 import org.apache.zeppelin.service.assistant.NotebookAssistantService;
@@ -53,13 +59,26 @@ public class AssistantConversationRestApi extends AbstractRestApi {
     this.assistantService = assistantService;
   }
 
+  /**
+   * Parse a request body, turning malformed JSON into a 400 instead of a 500.
+   */
+  private static CreateConversationRequest parseBody(String body) {
+    try {
+      return GSON.fromJson(body, CreateConversationRequest.class);
+    } catch (JsonSyntaxException e) {
+      throw new BadRequestException("Invalid JSON request body");
+    }
+  }
+
   @GET
   @ZeppelinApi
   public Response list(@PathParam("noteId") String noteId) throws IOException {
     return new JsonResponse<>(
         Response.Status.OK,
         "",
-        assistantService.listConversations(noteId, getServiceContext())
+        assistantService.listConversations(noteId, getServiceContext()).stream()
+            .map(ConversationMetadata::of)
+            .collect(Collectors.toList())
     ).build();
   }
 
@@ -70,8 +89,13 @@ public class AssistantConversationRestApi extends AbstractRestApi {
       @PathParam("noteId") String noteId,
       @PathParam("conversationId") String conversationId
   ) throws IOException {
-    return new JsonResponse<>(Response.Status.OK, "",
-        assistantService.getConversation(noteId, conversationId, getServiceContext())).build();
+    var conversation = assistantService.getConversation(
+        noteId,
+        conversationId,
+        getServiceContext()
+    );
+    return new JsonResponse<>(Response.Status.OK, "", ConversationResponse.of(conversation))
+        .build();
   }
 
   @POST
@@ -80,11 +104,30 @@ public class AssistantConversationRestApi extends AbstractRestApi {
       @PathParam("noteId") String noteId,
       String body
   ) throws IOException {
-    String title = Optional.ofNullable(GSON.fromJson(body, CreateConversationRequest.class))
+    String title = Optional.ofNullable(parseBody(body))
         .map(CreateConversationRequest::getTitle)
-        .orElseGet(() -> noteId + " " + Instant.now());
+        .orElse(null);
     var conversation = assistantService.createConversation(noteId, title, getServiceContext());
-    return new JsonResponse<>(Response.Status.CREATED, "", conversation).build();
+    return new JsonResponse<>(Response.Status.CREATED, "", ConversationMetadata.of(conversation))
+        .build();
+  }
+
+  @PATCH
+  @Path("/{conversationId}")
+  @ZeppelinApi
+  public Response updateTitle(
+      @PathParam("noteId") String noteId,
+      @PathParam("conversationId") String conversationId,
+      String body
+  ) throws IOException {
+    String title = Optional.ofNullable(parseBody(body))
+        .map(CreateConversationRequest::getTitle)
+        .filter(t -> !t.isBlank())
+        .orElseThrow(() -> new BadRequestException("title is required"));
+    var conversation =
+        assistantService.updateTitle(noteId, conversationId, title, getServiceContext());
+    return new JsonResponse<>(Response.Status.OK, "",
+        ConversationMetadata.of(conversation)).build();
   }
 
   @DELETE

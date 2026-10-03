@@ -855,4 +855,10 @@
   <value>gpt-6-luna</value>
 </property>
 
+<property>
+  <name>zeppelin.notebook.assistant.dir</name>
+  <value></value>
+  <description>Directory for assistant conversations, stored separately from notebook data. Defaults to an "assistant" subdirectory under the config FS directory.</description>
+</property>
+
 </configuration>

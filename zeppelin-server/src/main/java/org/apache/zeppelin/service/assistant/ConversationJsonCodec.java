@@ -28,10 +28,9 @@ import com.google.gson.JsonSerializationContext;
 import com.google.gson.JsonSerializer;
 
 import java.lang.reflect.Type;
-import java.util.List;
 
 /**
- * JSON wire format for the inline hidden-paragraph storage of assistant conversations.
+ * JSON wire format for an assistant conversation.
  */
 final class ConversationJsonCodec {
 
@@ -42,29 +41,17 @@ final class ConversationJsonCodec {
   private ConversationJsonCodec() {
   }
 
-  static String serialize(List<Conversation> conversations) {
-    return GSON.toJson(new Data(conversations));
+  static String serialize(Conversation conversation) {
+    return GSON.toJson(conversation);
   }
 
-  static List<Conversation> deserialize(String json) {
-    Data data = GSON.fromJson(json, Data.class);
-    if (data == null || data.conversations == null
-        || data.conversations.stream().anyMatch(c -> c == null || c.getId() == null
-        || c.getMessages() == null)) {
+  static Conversation deserialize(String json) {
+    Conversation conversation = GSON.fromJson(json, Conversation.class);
+    if (conversation == null || conversation.getId() == null || conversation.getNoteId() == null
+        || conversation.getCreatedAt() == null || conversation.getMessages() == null) {
       throw new JsonParseException("Invalid assistant conversation storage");
     }
-    return data.conversations;
-  }
-
-  /**
-   * JSON root wrapper.
-   */
-  private static class Data {
-    List<Conversation> conversations;
-
-    Data(List<Conversation> conversations) {
-      this.conversations = conversations;
-    }
+    return conversation;
   }
 
   /**

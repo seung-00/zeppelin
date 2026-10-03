@@ -896,6 +896,16 @@ public class ZeppelinConfiguration {
     return getString(ConfVars.ZEPPELIN_NOTEBOOK_ASSISTANT_OPENAI_MODEL);
   }
 
+  /**
+   * Directory holding assistant conversations, stored separately from notebook data.
+   * Defaults to an {@code assistant} subdirectory under the config FS directory.
+   */
+  public String getNotebookAssistantDir() {
+    String dir = getString(ConfVars.ZEPPELIN_NOTEBOOK_ASSISTANT_DIR);
+    if (StringUtils.isBlank(dir)) return getConfigFSDir(true) + "/assistant";
+    return dir;
+  }
+
   public boolean isOnlyYarnCluster() {
     return getBoolean(ConfVars.ZEPPELIN_SPARK_ONLY_YARN_CLUSTER);
   }
@@ -1202,7 +1212,8 @@ public class ZeppelinConfiguration {
     ZEPPELIN_NOTE_FILE_EXCLUDE_FIELDS("zeppelin.note.file.exclude.fields", ""),
     ZEPPELIN_NOTEBOOK_ASSISTANT_ENABLE("zeppelin.notebook.assistant.enable", false),
     ZEPPELIN_NOTEBOOK_ASSISTANT_OPENAI_API_KEY("zeppelin.notebook.assistant.openai.api.key", ""),
-    ZEPPELIN_NOTEBOOK_ASSISTANT_OPENAI_MODEL("zeppelin.notebook.assistant.openai.model", "");
+    ZEPPELIN_NOTEBOOK_ASSISTANT_OPENAI_MODEL("zeppelin.notebook.assistant.openai.model", ""),
+    ZEPPELIN_NOTEBOOK_ASSISTANT_DIR("zeppelin.notebook.assistant.dir", "");
 
     private String varName;
     private Class<?> varClass;

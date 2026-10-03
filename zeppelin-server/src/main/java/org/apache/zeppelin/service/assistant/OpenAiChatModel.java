@@ -90,12 +90,21 @@ public class OpenAiChatModel implements ChatModel {
           .build());
     }
 
+    boolean[] completed = {false};
     try (
         StreamResponse<ResponseStreamEvent> stream = client()
             .responses()
             .createStreaming(params.build())
     ) {
-      stream.stream().forEach(event -> handleEvent(event, consumer));
+      stream.stream().forEach(event -> {
+        if (event.completed().isPresent()) completed[0] = true;
+        handleEvent(event, consumer);
+      });
+    }
+    // A stream that ends without a completed response (e.g. truncated connection) must not be
+    // reported as a successful reply; surface it so the run fails instead of saving a partial.
+    if (!completed[0]) {
+      throw new IllegalStateException("OpenAI stream ended without a completed response");
     }
   }
 
@@ -147,8 +156,24 @@ public class OpenAiChatModel implements ChatModel {
       ResponseStreamEvent event,
       Consumer<AssistantEvent> consumer
   ) {
+    // A failure event ends the stream without a completion; surface it instead of silently
+    // saving an empty/partial reply and reporting success.
+    event.error().ifPresent(e -> {
+      throw new IllegalStateException("OpenAI stream error: " + e.message());
+    });
+    event.failed().ifPresent(f -> {
+      throw new IllegalStateException("OpenAI response failed");
+    });
+    event.incomplete().ifPresent(i -> {
+      throw new IllegalStateException("OpenAI response incomplete");
+    });
+
     event.outputTextDelta().ifPresent(
         d -> consumer.accept(new AssistantEvent.TextDelta(d.delta())));
+
+    // A refusal is a real reply the user must see; stream it as text so it is delivered and saved.
+    event.refusalDelta().ifPresent(
+        r -> consumer.accept(new AssistantEvent.TextDelta(r.delta())));
 
     event.outputItemDone().flatMap(done -> done.item().functionCall())
         .ifPresent(call ->

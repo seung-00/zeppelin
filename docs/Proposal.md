@@ -36,8 +36,8 @@ Browser (Angular)
 Zeppelin Server
     ├── REST APIs                      conversation CRUD, message history
     ├── NotebookServer (WS)            receive send, deliver owner-only run events
-    └── NotebookAssistantService       run loop, per-note lock
-          ├── ConversationStore        separate conversation storage
+    └── NotebookAssistantService       run loop, per-conversation execution slot
+          ├── ConversationRepository   pluggable conversation storage
           ├── ToolExecutor             in-process tool registry
           └── ChatModel                provider-neutral streaming interface
                 └── OpenAiChatModel    OpenAI adapter
@@ -55,11 +55,12 @@ Key decisions:
   start a conversation without notebook write permission. A notebook and a user
   can each have multiple conversations. The server assigns `ownerId` from the
   authenticated identity; anonymous users cannot create conversations.
-- **Shared list, private conversations**: All users with read access to the
-  notebook can see conversation summaries (`id`, `noteId`, `ownerId`, `title`,
-  `createdAt`, `updatedAt`). Messages and previews are excluded. Only the owner
-  can read the content, send messages, change the title when supported, or delete
-  the conversation. Notebook read access is also required for these operations.
+- **Shared list and content, owner-only changes**: All users with read access to
+  the notebook can see conversation summaries (`id`, `noteId`, `ownerId`, `title`,
+  `createdAt`, `updatedAt`) and read the conversation content and message history.
+  The list is metadata-only; full content is served separately. Only the owner can
+  send messages, change the title, or delete the conversation. Notebook read access
+  is required for all of these operations.
 - **Streaming over WebSocket**: Sending a message and streaming the reply use the
   existing notebook WebSocket. Run events are delivered only to the owner,
   never broadcast to other notebook viewers.
@@ -110,7 +111,9 @@ conversation list exposes metadata only; the UI identifies the owner and makes
 other users' conversations unavailable for opening or editing. Titles are shared
 metadata, so the UI should make their visibility clear.
 
-Read-modify-write on the store is serialized by a per-note in-memory lock. A run
+Each conversation has its own JSON file. Updates, deletion, and message runs
+reserve the same per-conversation execution slot; conflicts return 409 immediately.
+Creation writes an independent file. A run
 always ends with either a completed or a failed event; since there is no HTTP
 status over WebSocket, every failure is surfaced as a failed event.
 

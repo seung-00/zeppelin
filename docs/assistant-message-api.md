@@ -1,3 +1,11 @@
+<!--
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+http://www.apache.org/licenses/LICENSE-2.0
+-->
+
 # Assistant Message API
 
 Two channels:
@@ -50,7 +58,7 @@ Sending runs over the notebook WebSocket, same socket as the rest of the note.
 
 ### Server → client (streamed)
 
-The reply streams back as multiple `ASSISTANT_EVENT` messages, broadcast to the note:
+The reply streams back as multiple `ASSISTANT_EVENT` messages, sent only to the requesting owner connection:
 
 ```json
 {
@@ -77,4 +85,5 @@ Dispatch on `data.type`:
 
 Typical order: `run.started` → (`tool_call.started` → `tool_call.done`)* → `message.delta`* → `message.done` → `run.completed`. On error, `run.failed` instead of `run.completed`.
 
-> Events are broadcast to all connections on the note — filter by `conversationId`.
+> Events are delivered only to the requesting owner connection, not broadcast to other
+> notebook viewers. Route by `conversationId` if an owner has multiple conversations open.

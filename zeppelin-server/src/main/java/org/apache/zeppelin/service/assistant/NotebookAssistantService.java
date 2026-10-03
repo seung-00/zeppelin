@@ -19,7 +19,6 @@ package org.apache.zeppelin.service.assistant;
 
 import com.google.gson.Gson;
 
-import org.jvnet.hk2.annotations.Service;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import java.io.IOException;
@@ -29,15 +28,17 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Consumer;
-import java.util.function.Function;
-import jakarta.inject.Inject;
+import java.util.concurrent.ConcurrentHashMap;
+import jakarta.ws.rs.BadRequestException;
+import jakarta.ws.rs.ClientErrorException;
 import jakarta.ws.rs.ForbiddenException;
 import jakarta.ws.rs.NotFoundException;
 import jakarta.ws.rs.ServiceUnavailableException;
-import org.apache.zeppelin.conf.ZeppelinConfiguration;
+import jakarta.ws.rs.WebApplicationException;
+import jakarta.ws.rs.core.Response;
 import org.apache.zeppelin.notebook.AuthorizationService;
 import org.apache.zeppelin.notebook.Notebook;
 import org.apache.zeppelin.rest.exception.NoteNotFoundException;
@@ -45,7 +46,6 @@ import org.apache.zeppelin.service.NotebookService;
 import org.apache.zeppelin.service.ServiceContext;
 import org.apache.zeppelin.user.AuthenticationInfo;
 
-@Service
 public class NotebookAssistantService {
 
   private static final Logger LOGGER = LoggerFactory.getLogger(NotebookAssistantService.class);
@@ -58,25 +58,27 @@ public class NotebookAssistantService {
 
   private final AuthorizationService authorizationService;
 
-  private final Map<String, Object> noteLocks = new ConcurrentHashMap<>();
+  private final Set<String> busyConversations = ConcurrentHashMap.newKeySet();
 
-  private final ZeppelinConfiguration zConf;
+  private final boolean available;
   private final Notebook notebook;
   private final ChatModel modelClient;
+  private final ConversationRepository conversationRepository;
   private final ToolExecutor toolExecutor;
 
-  @Inject
   public NotebookAssistantService(
-      ZeppelinConfiguration zConf,
+      boolean available,
       Notebook notebook,
       ChatModel modelClient,
       NotebookService notebookService,
-      AuthorizationService authorizationService
+      AuthorizationService authorizationService,
+      ConversationRepository conversationRepository
   ) {
     this.authorizationService = authorizationService;
-    this.zConf = zConf;
+    this.available = available;
     this.notebook = notebook;
     this.modelClient = modelClient;
+    this.conversationRepository = conversationRepository;
     this.toolExecutor = new ToolExecutor(
         List.of(
             new ListParagraphsTool(notebookService)
@@ -84,27 +86,19 @@ public class NotebookAssistantService {
     );
   }
 
-  private Object lockFor(String noteId) {
-    return noteLocks.computeIfAbsent(noteId, k -> new Object());
-  }
-
-  private void ensureAvailable() {
-    if (
-        !zConf.isNotebookAssistantEnabled() ||
-            zConf.getNotebookAssistantApiKey() == null ||
-            zConf.getNotebookAssistantApiKey().isBlank()
-    ) {
-      throw new ServiceUnavailableException("Notebook Assistant is not configured");
-    }
-  }
-
   public List<Conversation> listConversations(
       String noteId,
       ServiceContext ctx
   ) throws IOException {
-    ensureAvailable();
-    checkPermission(noteId, ctx, false);
-    return readStore(noteId, ctx.getAutheInfo(), ConversationStore::findAll);
+    if (!available) throw new ServiceUnavailableException();
+    if (!authorizationService.isReader(noteId, ctx.getUserAndRoles())) {
+      throw new ForbiddenException();
+    }
+
+    return notebook.processNote(noteId, note -> {
+      if (note == null) throw new NoteNotFoundException(noteId);
+      return conversationRepository.findAll(noteId);
+    });
   }
 
   public Conversation createConversation(
@@ -112,13 +106,19 @@ public class NotebookAssistantService {
       String title,
       ServiceContext ctx
   ) throws IOException {
-    ensureAvailable();
-    checkPermission(noteId, ctx, true);
-    var conversation = Conversation.create(noteId, title);
-    synchronized (lockFor(noteId)) {
-      mutateStore(noteId, ctx.getAutheInfo(), store -> store.add(conversation));
+    if (!available) throw new ServiceUnavailableException();
+    if (!authorizationService.isReader(noteId, ctx.getUserAndRoles())) {
+      throw new ForbiddenException();
     }
-    return conversation;
+    AuthenticationInfo authInfo = ctx.getAutheInfo();
+    if (AuthenticationInfo.isAnonymous(authInfo)) throw new ForbiddenException();
+
+    return notebook.processNote(noteId, note -> {
+      if (note == null) throw new NoteNotFoundException(noteId);
+      var conversation = Conversation.create(noteId, title, authInfo.getUser());
+      conversationRepository.create(conversation);
+      return conversation;
+    });
   }
 
   public Conversation getConversation(
@@ -126,10 +126,37 @@ public class NotebookAssistantService {
       String conversationId,
       ServiceContext ctx
   ) throws IOException {
-    ensureAvailable();
-    checkPermission(noteId, ctx, false);
-    return readStore(noteId, ctx.getAutheInfo(), store -> store.find(conversationId))
-        .orElseThrow(NotFoundException::new);
+    if (!available) throw new ServiceUnavailableException();
+    if (!authorizationService.isReader(noteId, ctx.getUserAndRoles())) {
+      throw new ForbiddenException();
+    }
+    return notebook.processNote(noteId, note -> {
+      if (note == null) throw new NoteNotFoundException(noteId);
+      return conversationRepository.find(noteId, conversationId).orElseThrow();
+    });
+  }
+
+  public Conversation updateTitle(
+      String noteId,
+      String conversationId,
+      String title,
+      ServiceContext ctx
+  ) throws IOException {
+    if (!available) throw new ServiceUnavailableException();
+    if (!busyConversations.add(conversationId)) {
+      throw new ClientErrorException("", Response.Status.CONFLICT);
+    }
+    try {
+      Conversation conversation = getConversation(noteId, conversationId, ctx);
+      if (!conversation.isOwner(ctx.getAutheInfo().getUser())) throw new ForbiddenException();
+      return notebook.processNote(noteId, note -> {
+        if (note == null) throw new NoteNotFoundException(noteId);
+        conversationRepository.update(conversation, c -> c.setTitle(title));
+        return conversation;
+      });
+    } finally {
+      busyConversations.remove(conversationId);
+    }
   }
 
   public void deleteConversation(
@@ -137,14 +164,20 @@ public class NotebookAssistantService {
       String conversationId,
       ServiceContext ctx
   ) throws IOException {
-    ensureAvailable();
-    checkPermission(noteId, ctx, true);
-    synchronized (lockFor(noteId)) {
-      mutateStore(noteId, ctx.getAutheInfo(), store -> {
-        if (!store.remove(conversationId)) {
-          throw new NotFoundException("Conversation not found: " + conversationId);
-        }
+    if (!available) throw new ServiceUnavailableException();
+    if (!busyConversations.add(conversationId)) {
+      throw new ClientErrorException("", Response.Status.CONFLICT);
+    }
+    try {
+      Conversation conversation = getConversation(noteId, conversationId, ctx);
+      if (!conversation.isOwner(ctx.getAutheInfo().getUser())) throw new ForbiddenException();
+      notebook.processNote(noteId, note -> {
+        if (note == null) throw new NoteNotFoundException(noteId);
+        conversationRepository.delete(noteId, conversationId);
+        return null;
       });
+    } finally {
+      busyConversations.remove(conversationId);
     }
   }
 
@@ -155,6 +188,7 @@ public class NotebookAssistantService {
       int limit,
       ServiceContext ctx
   ) throws IOException {
+    if (limit <= 0) throw new BadRequestException("limit must be positive");
     List<Message> all = getConversation(noteId, conversationId, ctx).getMessages();
 
     int cursorIdx = -1;
@@ -178,47 +212,37 @@ public class NotebookAssistantService {
     return new Messages(page, next);
   }
 
-  private <T> T readStore(
-      String noteId,
-      AuthenticationInfo subject,
-      Function<ConversationStore, T> mapper
-  ) throws IOException {
-    return notebook.processNote(noteId, note -> {
-      if (note == null) {
-        throw new NoteNotFoundException(noteId);
+  /**
+   * Classifies a run failure into a {@code run.failed} error code. The WS flow has no HTTP
+   * status, so the service's own {@link WebApplicationException}s (403/404/409/503) are mapped
+   * to a code and keep their message, which is safe and user-facing. Any other failure
+   * (OpenAI, tool, I/O, save, loop limit) is reported as {@code internal_error} with a generic
+   * message so internal exception detail never reaches the client; the stack is logged above.
+   */
+  private static AssistantEventPayload.Error toError(Exception e) {
+    if (e instanceof WebApplicationException) {
+      int status = ((WebApplicationException) e).getResponse().getStatus();
+      String code;
+      switch (status) {
+        case 403:
+          code = "forbidden";
+          break;
+        case 404:
+          code = "not_found";
+          break;
+        case 409:
+          code = "conflict";
+          break;
+        case 503:
+          code = "unavailable";
+          break;
+        default:
+          code = "invalid_request";
+          break;
       }
-      return mapper.apply(ConversationStore.attach(note, subject));
-    });
-  }
-
-  private void mutateStore(
-      String noteId,
-      AuthenticationInfo subject,
-      Consumer<ConversationStore> consumer
-  ) throws IOException {
-    notebook.processNote(noteId, note -> {
-      if (note == null) {
-        throw new NoteNotFoundException(noteId);
-      }
-      ConversationStore store = ConversationStore.attach(note, subject);
-      consumer.accept(store);
-      store.flush();
-      notebook.saveNote(note, subject);
-      return null;
-    });
-  }
-
-  private void checkPermission(
-      String noteId,
-      ServiceContext ctx,
-      boolean write
-  ) {
-    boolean allowed = write
-        ? authorizationService.isWriter(noteId, ctx.getUserAndRoles())
-        : authorizationService.isReader(noteId, ctx.getUserAndRoles());
-    if (!allowed) {
-      throw new ForbiddenException("Insufficient notebook privileges");
+      return new AssistantEventPayload.Error(code, e.getMessage());
     }
+    return new AssistantEventPayload.Error("internal_error", "Internal error during assistant run");
   }
 
   public void sendMessage(
@@ -229,13 +253,24 @@ public class NotebookAssistantService {
       AssistantEventListener sink
   ) {
     var runId = "run_" + UUID.randomUUID().toString().replace("-", "").substring(0, 16);
+    boolean acquired = false;
     try {
-      ensureAvailable();
-      checkPermission(noteId, ctx, true);
+      if (!available) throw new ServiceUnavailableException();
+      if (userContent == null || userContent.isBlank()) {
+        // The model adapter drops a null/blank message, so storing it and running would make
+        // the saved history disagree with what the model actually received. Reject up front.
+        throw new BadRequestException("message content is required");
+      }
 
-      var conversation = getConversation(noteId, conversationId, ctx);
-      conversation.addMessage(Message.user(Message.id(), userContent));
-      persistConversation(noteId, conversation, ctx.getAutheInfo());
+      if (!busyConversations.add(conversationId)) {
+        throw new ClientErrorException("", Response.Status.CONFLICT);
+      }
+      acquired = true;
+      Conversation conversation = getConversation(noteId, conversationId, ctx);
+      if (!conversation.isOwner(ctx.getAutheInfo().getUser())) throw new ForbiddenException();
+
+      persistConversation(noteId, conversation,
+          c -> c.addMessage(Message.user(Message.id(), userContent)));
 
       sink.onEvent(
           AssistantEventType.RUN_STARTED,
@@ -259,11 +294,10 @@ public class NotebookAssistantService {
       LOGGER.error("Error during Notebook Assistant run", e);
       sink.onEvent(
           AssistantEventType.RUN_FAILED,
-          new AssistantEventPayload.RunFailed(
-              runId,
-              new AssistantEventPayload.Error("internal_error", String.valueOf(e.getMessage()))
-          )
+          new AssistantEventPayload.RunFailed(runId, toError(e))
       );
+    } finally {
+      if (acquired) busyConversations.remove(conversationId);
     }
   }
 
@@ -310,7 +344,17 @@ public class NotebookAssistantService {
         for (ToolCall tc : toolCalls) {
           assistantMsg.addToolCall(tc);
         }
-        conversation.addMessage(assistantMsg);
+        List<Message> turn = new ArrayList<>();
+        turn.add(assistantMsg);
+
+        // Close the streamed message so per-message clients can finalize it, even when the
+        // same turn also requests tools.
+        if (textBuffer.length() > 0) {
+          sink.onEvent(
+              AssistantEventType.MESSAGE_DONE,
+              new AssistantEventPayload.MessageDone(assistantId, textBuffer.toString())
+          );
+        }
 
         for (ToolCall tc : assistantMsg.getToolCalls()) {
           sink.onEvent(
@@ -319,17 +363,19 @@ public class NotebookAssistantService {
           );
           ToolResult result = toolExecutor.callTool(noteId, tc.getName(), tc.getArguments(), ctx);
           tc.setResult(result);
-          conversation.addMessage(Message.tool(Message.id(), tc.getId(), GSON.toJson(result)));
-          persistConversation(noteId, conversation, ctx.getAutheInfo());
+          turn.add(Message.tool(Message.id(), tc.getId(), GSON.toJson(result)));
           sink.onEvent(
               AssistantEventType.TOOL_CALL_DONE,
               new AssistantEventPayload.ToolCallDone(tc.getId(), result)
           );
         }
+        // Persist the assistant message and all its tool results in one write, so a failed
+        // save never leaves a stored turn with more tool calls than results.
+        persistConversation(noteId, conversation, c -> turn.forEach(c::addMessage));
       } else {
         String assistantText = textBuffer.toString();
-        conversation.addMessage(Message.assistant(assistantId, assistantText));
-        persistConversation(noteId, conversation, ctx.getAutheInfo());
+        persistConversation(noteId, conversation,
+            c -> c.addMessage(Message.assistant(assistantId, assistantText)));
         sink.onEvent(
             AssistantEventType.MESSAGE_DONE,
             new AssistantEventPayload.MessageDone(assistantId, assistantText)
@@ -343,15 +389,13 @@ public class NotebookAssistantService {
   private void persistConversation(
       String noteId,
       Conversation conversation,
-      AuthenticationInfo subject
+      Consumer<Conversation> change
   ) throws IOException {
-    synchronized (lockFor(noteId)) {
-      mutateStore(noteId, subject, store -> {
-        if (!store.contains(conversation.getId())) {
-          throw new NotFoundException("Conversation not found: " + conversation.getId());
-        }
-        store.replace(conversation);
-      });
-    }
+    notebook.processNote(noteId, note -> {
+      if (note == null) throw new NoteNotFoundException(noteId);
+      conversationRepository.update(conversation, change);
+      return null;
+    });
   }
+
 }

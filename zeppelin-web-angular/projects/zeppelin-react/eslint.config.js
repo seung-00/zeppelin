@@ -71,7 +71,8 @@ module.exports = tseslint.config(
       ...react.configs.recommended.rules,
       ...react.configs['jsx-runtime'].rules,
       // == legacy `plugin:react-hooks/recommended`
-      ...reactHooks.configs.recommended.rules,
+      'react-hooks/rules-of-hooks': 'error',
+      'react-hooks/exhaustive-deps': 'warn',
 
       // == legacy custom `rules` (1:1 port from .eslintrc.json)
       '@typescript-eslint/no-explicit-any': 'error',
@@ -95,6 +96,7 @@ module.exports = tseslint.config(
     // Catch specs that cannot fail, as eslint-plugin-playwright does for e2e.
     files: ['src/**/*.spec.{ts,tsx}'],
     plugins: { vitest },
+    settings: { vitest: { typecheck: true } },
     rules: {
       'vitest/expect-expect': 'error',
       'vitest/no-conditional-expect': 'error',

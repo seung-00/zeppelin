@@ -25,3 +25,4 @@ export { EmptyState } from './ui/EmptyState';
 export { ConversationHeader } from './ui/ConversationHeader';
 export { ConversationList } from './ui/ConversationList';
 export type { ConversationOption } from './ui/ConversationList';
+export * from './model/assistantSession';

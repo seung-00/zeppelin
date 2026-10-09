@@ -151,6 +151,9 @@ The following components are provided under Apache License.
     (Apache 2.0) gcsio.jar (com.google.cloud.bigdataoss:gcsio:1.4.5 - https://github.com/GoogleCloudPlatform/BigData-interop/gcsio/)
     (Apache 2.0) util (com.google.cloud.bigdataoss:util:1.4.5 - https://github.com/GoogleCloudPlatform/BigData-interop/util/)
     (Apache 2.0) Google Guice - Core Library (com.google.inject:guice:3.0 - http://code.google.com/p/google-guice/guice/)
+    (Apache 2.0) OpenAI Java SDK (com.openai:openai-java:4.69.3) - https://github.com/openai/openai-java/blob/main/LICENSE
+    (Apache 2.0) OkHttp (com.squareup.okhttp3:okhttp:4.12.0) - https://github.com/square/okhttp/blob/parent-4.12.0/LICENSE.txt
+    (Apache 2.0) Okio (com.squareup.okio:okio-jvm:3.6.0) - https://github.com/square/okio/blob/3.6.0/LICENSE.txt
     (Apache 2.0) OkHttp (com.squareup.okhttp:okhttp:2.5.0 - https://github.com/square/okhttp/okhttp)
     (Apache 2.0) Okio (com.squareup.okio:okio:1.6.0 - https://github.com/square/okio/okio)
     (Apache 2.0) OkHttp mockwebserver (com.squareup.okhttp3:mockwebserver:3.13.1) - https://github.com/square/okhttp/blob/master/LICENSE.txt
@@ -253,6 +256,8 @@ MIT licenses
 The following components are provided under the MIT License. See project link for details.
 The text of each license is also included at licenses/LICENSE-[project]-[version].txt.
     (The MIT License) Storybook 10.6.1 (storybook, @storybook/react-vite) - https://github.com/storybookjs/storybook/blob/v10.6.1/LICENSE (see licenses/LICENSE-storybook-10.6.1)
+    (The MIT License) remark-gfm 4.0.1 - https://github.com/remarkjs/remark-gfm/blob/main/license (see licenses/LICENSE-remark-gfm-4.0.1)
+    (The MIT License) react-markdown 10.1.0 - https://github.com/remarkjs/react-markdown/blob/main/license (see licenses/LICENSE-react-markdown-10.1.0)
     (The MIT License) vanilla-extract (@vanilla-extract/css 1.21.2, @vanilla-extract/dynamic 2.1.5, @vanilla-extract/webpack-plugin 2.3.27, @vanilla-extract/vite-plugin 5.2.6)
       https://github.com/vanilla-extract-css/vanilla-extract/blob/master/LICENSE (see licenses/LICENSE-vanilla-extract-1.21.2)
 

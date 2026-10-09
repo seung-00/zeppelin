@@ -35,11 +35,11 @@ is kebab-case (`zeppelin-react-mount`) per project ESLint convention.
 
 ## Migration roadmap
 
-| Phase | Scope | Status |
-|-------|-------|--------|
-| 1 | Webpack 5 + Module Federation setup | Done |
-| 1.5 | Published paragraph (pilot) | Done |
-| 2 | Notebook and interpreter modules | Planned |
+| Phase | Scope                               | Status  |
+| ----- | ----------------------------------- | ------- |
+| 1     | Webpack 5 + Module Federation setup | Done    |
+| 1.5   | Published paragraph (pilot)         | Done    |
+| 2     | Notebook and interpreter modules    | Planned |
 
 The published paragraph was picked as pilot because it's read-only and has almost no coupling to other modules.
 
@@ -70,14 +70,14 @@ Host components do not touch `window.reactApp` themselves; they bind props to th
 
 Each React surface is behind a URL query flag, resolved by `ReactFeatureService`:
 
-| URL | Result |
-| --- | --- |
-| `?react=true` | enabled |
-| `?react` | enabled |
+| URL            | Result   |
+| -------------- | -------- |
+| `?react=true`  | enabled  |
+| `?react`       | enabled  |
 | `?react=false` | disabled |
-| flag absent | disabled |
+| flag absent    | disabled |
 
-Append `?react=true` to any published paragraph URL, `?reactFooter=true` to a notebook URL, `?reactConfiguration=true` to the configuration URL, or `?reactNotebookRepos=true` to the notebook repository URL to activate React mode.
+Append `?react=true` to any published paragraph URL, `?reactFooter=true` to a notebook URL, `?reactConfiguration=true` to the configuration URL, `?reactNotebookRepos=true` to the notebook repository URL, or `?reactAssistant=true` to a notebook URL for the AI assistant panel to activate React mode.
 
 ## Setup
 
@@ -111,6 +111,31 @@ src/
 ├── utils/               # tableUtils, textUtils, exportFile
 └── main.ts              # re-exports for Module Federation
 ```
+
+## Assistant structure
+
+The assistant uses Feature-Sliced Design within this remote. Existing notebook
+and configuration surfaces keep their current layout. Dependencies flow from
+pages to widgets, features, entities and shared; a layer never imports a higher
+layer. Import another slice through its public `index.ts`, not its internals.
+
+- `pages/assistant-workspace`: the Angular host boundary, portals and resize handling.
+- `widgets/assistant-panel`: conversation orchestration and streaming state.
+- `entities/assistant`: conversation API, persisted drafts and presentational UI.
+- `shared`: theme tokens, the assistant mark and reusable hooks.
+
+The exposed `./AssistantWorkspace` module and the SDK host contract stay stable.
+Component styles live in colocated vanilla-extract `*.css.ts` files. A typed theme
+contract carries antd theme values across portals. Styles import generated class
+names for scoped selectors. Storybook stories are colocated with their components
+and remain outside the production entry points. The UI contract and history
+helpers are separate from the REST/WebSocket adapter.
+
+React 19 and antd 6 are used throughout the remote; no React 19 compatibility
+patch is required. Effect subscriptions use `useEffectEvent` when they
+need current values without reconnecting; event handlers and transport callbacks
+keep normal callbacks. The composer accepts `ref` as a prop, and covered panel
+content uses React's native `inert` prop.
 
 ## Adding a new React module
 
@@ -150,17 +175,11 @@ export function mount(element: HTMLElement, props: Props): ReactMountHandle;
    ```
 6. Re-export from `main.ts`:
    ```ts
-   export {
-     ExampleFeature,
-     mount as mountExampleFeature
-   } from './components/<area>/ExampleFeature';
+   export { ExampleFeature, mount as mountExampleFeature } from './components/<area>/ExampleFeature';
    ```
 7. Use from Angular by adding the directive to your template:
    ```html
-   <div
-     zeppelin-react-mount="./ExampleFeature"
-     [reactProps]="exampleFeatureProps"
-   ></div>
+   <div zeppelin-react-mount="./ExampleFeature" [reactProps]="exampleFeatureProps"></div>
    ```
    `exampleFeatureProps` should be a getter on the host component (not
    an inline object literal) so identity is stable when nothing changed.

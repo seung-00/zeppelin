@@ -31,8 +31,8 @@
       <div
         class="sidebar-area"
         nz-resizable
-        [nzMaxWidth]="!isSidebarOpen ? 40 : 800"
-        [nzMinWidth]="!isSidebarOpen ? 40 : 280"
+        [nzMaxWidth]="!isSidebarOpen ? 40 : sidebarWidthRange.max"
+        [nzMinWidth]="!isSidebarOpen ? 40 : sidebarWidthRange.min"
         (nzResize)="onResizeSidebar($event)"
         [style.min-width.px]="!isSidebarOpen ? 40 : sidebarWidth"
       >
@@ -45,6 +45,7 @@
           <nz-resize-handle nzDirection="right"><div class="sidebar-resize"></div></nz-resize-handle>
         }
       </div>
+      <div zeppelin-assistant-slot="panel"></div>
       <div class="notebook-area">
         @if (activatedExtension !== 'hide' && permissions) {
           <div class="extension-area">
@@ -103,6 +104,7 @@
                 [last]="last"
                 [useReactFooter]="useReactFooter"
                 [attr.data-testid]="p.id"
+                [attr.data-paragraph-id]="p.id"
                 (selectAtIndex)="onSelectAtIndex($event)"
                 (selected)="onParagraphSelect($event)"
                 (triggerSaveParagraph)="saveParagraph($event)"
@@ -114,5 +116,13 @@
         </div>
       </div>
     </div>
+    @if (!viewOnly && !revisionView) {
+      <zeppelin-assistant-host
+        [note]="note"
+        [enabled]="useReactAssistant"
+        [sidebarWidth]="sidebarWidth"
+        (panelWidthChange)="sidebarWidth = $event"
+      ></zeppelin-assistant-host>
+    }
   </div>
 }

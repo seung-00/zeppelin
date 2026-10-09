@@ -52,6 +52,7 @@ export const PAGES = {
     NOTEBOOK: 'src/app/pages/workspace/notebook/notebook.component',
     NOTEBOOK_ACTION_BAR: 'src/app/pages/workspace/notebook/action-bar/action-bar.component',
     NOTEBOOK_ADD_PARAGRAPH: 'src/app/pages/workspace/notebook/add-paragraph/add-paragraph.component',
+    NOTEBOOK_ASSISTANT_HOST: 'src/app/pages/workspace/notebook/assistant/assistant-host.component',
     NOTEBOOK_INTERPRETER_BINDING: 'src/app/pages/workspace/notebook/interpreter-binding/interpreter-binding.component',
     NOTEBOOK_NOTE_FORM: 'src/app/pages/workspace/notebook/note-form-block/note-form-block.component',
     NOTEBOOK_PERMISSIONS: 'src/app/pages/workspace/notebook/permissions/permissions.component',
@@ -274,9 +275,16 @@ export const performLoginIfRequired = async (page: Page): Promise<boolean> => {
   const testUser = validUsers[0];
 
   const isLoginVisible = await page.locator('zeppelin-login').isVisible();
-  if (isLoginVisible) {
+  if (isLoginVisible || page.url().includes('#/login')) {
+    await page.locator('zeppelin-login').waitFor({ state: 'visible', timeout: 30000 });
     const loginPage = new LoginPage(page);
-    await loginPage.login(testUser.username, testUser.password);
+    const [response] = await Promise.all([
+      page.waitForResponse(
+        reply => new URL(reply.url()).pathname.endsWith('/api/login') && reply.request().method() === 'POST'
+      ),
+      loginPage.login(testUser.username, testUser.password)
+    ]);
+    if (!response.ok()) return false;
 
     await page.evaluate(() => {
       if (window.location.hash.includes('login')) {

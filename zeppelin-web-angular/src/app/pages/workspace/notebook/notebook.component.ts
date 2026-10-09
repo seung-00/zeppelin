@@ -35,6 +35,7 @@ import {
   InterpreterBindingItem,
   MessageReceiveDataTypeMap,
   Note,
+  NOTEBOOK_SIDEBAR_WIDTH,
   OP,
   RevisionListItem,
   WebSocketMessage
@@ -52,9 +53,12 @@ import {
 
 import { scrollIntoViewIfNeeded } from '@zeppelin/utility';
 import { NotebookParagraphComponent } from './paragraph/paragraph.component';
+import { AssistantReveal } from './assistant/assistant-reveal';
+import { AssistantSlots } from './assistant/assistant-slots';
 
 @Component({
   selector: 'zeppelin-notebook',
+  providers: [AssistantSlots, AssistantReveal],
   templateUrl: './notebook.component.html',
   styleUrls: ['./notebook.component.less'],
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -79,10 +83,13 @@ export class NotebookComponent extends MessageListenersManager implements OnInit
   saveTimer: ReturnType<typeof setTimeout> | null = null;
   interpreterBindings: InterpreterBindingItem[] = [];
   activatedExtension: 'interpreter' | 'permissions' | 'revisions' | 'hide' = 'hide';
-  sidebarWidth = 370;
+  // Shared with the assistant panel, which resizes within the same range.
+  readonly sidebarWidthRange = NOTEBOOK_SIDEBAR_WIDTH;
+  sidebarWidth: number = NOTEBOOK_SIDEBAR_WIDTH.initial;
   sidebarAnimationFrame = -1;
   isSidebarOpen = false;
   useReactFooter = false;
+  useReactAssistant = false;
 
   @MessageListener(OP.NOTE)
   getNote(data: MessageReceiveDataTypeMap[OP.NOTE]) {
@@ -473,6 +480,7 @@ export class NotebookComponent extends MessageListenersManager implements OnInit
       .pipe(startWith(this.activatedRoute.snapshot.queryParamMap), takeUntil(this.destroy$))
       .subscribe(data => {
         this.useReactFooter = this.reactFeature.isEnabled('paragraphFooter', data);
+        this.useReactAssistant = this.reactFeature.isEnabled('assistantPanel', data);
         this.cdr.markForCheck();
       });
     this.activatedRoute.params.pipe(takeUntil(this.destroy$), distinctUntilKeyChanged('noteId')).subscribe(() => {

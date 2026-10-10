@@ -25,8 +25,8 @@ import { AssistantSlots } from './assistant-slots';
     @if (useAssistantPanel) {
       @if (assistantPanelFailed) {
         <p role="alert">Unable to load the assistant.</p>
-      } @else {
-        <div zeppelin-react-mount="./AssistantWorkspace" [reactProps]="assistantProps ?? {}"></div>
+      } @else if (assistantProps) {
+        <div zeppelin-react-mount="./AssistantWorkspace" [reactProps]="assistantProps"></div>
       }
     }
   `,
@@ -85,7 +85,11 @@ export class AssistantHostComponent implements OnInit, DoCheck, OnDestroy {
 
   /** The notebook reads the reactAssistant flag with the other React surface flags. */
   @Input() set enabled(enabled: boolean) {
-    if (this.useAssistantPanel && !enabled) this.invalidateAssistant();
+    if (this.useAssistantPanel && !enabled) {
+      this.slots.requestPanelClose();
+      this.slots.setPanelOpen(false);
+      this.invalidateAssistant();
+    }
     // Turning it back on retries a remote that failed to load.
     if (!this.useAssistantPanel && enabled) this.assistantPanelFailed = false;
     this.useAssistantPanel = enabled;
@@ -93,6 +97,8 @@ export class AssistantHostComponent implements OnInit, DoCheck, OnDestroy {
 
   @Input() set note(note: Exclude<Note['note'], undefined>) {
     if (this.currentNote?.id !== note?.id) {
+      this.slots.requestPanelClose();
+      this.slots.setPanelOpen(false);
       this.invalidateAssistant();
       this.assistantPanelFailed = false;
     }
@@ -132,7 +138,12 @@ export class AssistantHostComponent implements OnInit, DoCheck, OnDestroy {
       // Slots are registered during child view checks; publish once that pass finishes.
       queueMicrotask(() => {
         if (this.destroyed) return;
-        this.assistantProps = null;
+        // Update the live remote without dropping its conversation or socket session.
+        if (this.assistantProps) {
+          this.assistantProps = { ...this.assistantProps, slots: this.slots.slots.value };
+        } else {
+          this.ngDoCheck();
+        }
         this.cdr.markForCheck();
       });
     });
@@ -163,6 +174,7 @@ export class AssistantHostComponent implements OnInit, DoCheck, OnDestroy {
 
   ngOnDestroy(): void {
     this.destroyed = true;
+    this.slots.setPanelOpen(false);
     this.invalidateAssistant();
     this.destroy$.next();
     this.destroy$.complete();

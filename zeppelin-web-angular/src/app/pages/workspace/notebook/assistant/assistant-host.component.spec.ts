@@ -11,7 +11,9 @@
  */
 
 import { HttpClient } from '@angular/common/http';
-import { ChangeDetectorRef } from '@angular/core';
+import { ChangeDetectorRef, Directive, Input, provideZoneChangeDetection } from '@angular/core';
+import { TestBed } from '@angular/core/testing';
+import { By } from '@angular/platform-browser';
 import { Router } from '@angular/router';
 import { NzMessageService } from 'ng-zorro-antd/message';
 import { Subject } from 'rxjs';
@@ -58,6 +60,11 @@ const paragraph = (id: string, title?: string): ParagraphItem => ({
   lineNumbers: false,
   fontSize: 14
 });
+
+@Directive({ selector: '[zeppelin-react-mount]', standalone: false })
+class AssistantMountProbe {
+  @Input() reactProps: unknown;
+}
 
 describe('AssistantHostComponent assistant panel', () => {
   let component: AssistantHostComponent;
@@ -111,6 +118,7 @@ describe('AssistantHostComponent assistant panel', () => {
 
   afterEach(() => {
     component.ngOnDestroy();
+    TestBed.resetTestingModule();
     vi.restoreAllMocks();
   });
 
@@ -200,6 +208,69 @@ describe('AssistantHostComponent assistant panel', () => {
     entry.remove(element);
     await Promise.resolve();
     expect(current().slots).toEqual([]);
+  });
+
+  it('updates slots without dropping live props or retiring the socket', async () => {
+    const original = current();
+    entry.set({ element: document.createElement('div'), kind: 'panel' });
+    await Promise.resolve();
+    expect(component.assistantProps).not.toBeNull();
+    expect(component.assistantProps?.slots).toEqual(entry.slots.value);
+    expect(component.assistantProps?.socket).toBe(original.socket);
+    expect(original.socket.signal?.aborted).toBe(false);
+    entry.remove(entry.slots.value[0].element);
+    await Promise.resolve();
+    expect(component.assistantProps?.slots).toEqual([]);
+    expect(component.assistantProps?.socket).toBe(original.socket);
+  });
+
+  it.each(['note', 'disabled', 'destroyed'])('clears the host panel state immediately when %s changes', reason => {
+    current();
+    const close = vi.fn();
+    entry.panelCloseRequests.subscribe(close);
+    entry.setPanelOpen(true);
+    if (reason === 'note') component.note = note('other-note');
+    else if (reason === 'disabled') component.enabled = false;
+    else component.ngOnDestroy();
+    expect(entry.panelOpen.value).toBe(false);
+    expect(close).toHaveBeenCalledTimes(reason === 'destroyed' ? 0 : 1);
+  });
+
+  it('mounts only with initialized props and keeps the mount during slot updates', async () => {
+    TestBed.configureTestingModule({
+      declarations: [AssistantHostComponent, AssistantMountProbe],
+      providers: [
+        provideZoneChangeDetection(),
+        { provide: BaseUrlService, useValue: { getRestApiBase: () => '/api' } },
+        { provide: TicketService, useValue: ticket },
+        { provide: AssistantSlots, useValue: entry },
+        { provide: AssistantReveal, useValue: { reveal: revealParagraph } },
+        {
+          provide: MessageService,
+          useValue: {
+            send: socketSend,
+            receive: () => socketEvents,
+            closed: () => socketClosed
+          }
+        }
+      ]
+    });
+    const fixture = TestBed.createComponent(AssistantHostComponent);
+    fixture.componentInstance.enabled = true;
+    fixture.detectChanges();
+    expect(fixture.debugElement.query(By.directive(AssistantMountProbe))).toBeNull();
+    fixture.componentInstance.note = note('mounted-note');
+    fixture.changeDetectorRef.markForCheck();
+    fixture.detectChanges();
+    const mounted = fixture.debugElement.query(By.directive(AssistantMountProbe)).injector.get(AssistantMountProbe);
+    expect(mounted.reactProps).toMatchObject({ noteId: 'mounted-note' });
+    entry.set({ element: document.createElement('div'), kind: 'panel' });
+    await Promise.resolve();
+    fixture.detectChanges();
+    const updated = fixture.debugElement.query(By.directive(AssistantMountProbe)).injector.get(AssistantMountProbe);
+    expect(updated).toBe(mounted);
+    expect(updated.reactProps).toMatchObject({ slots: entry.slots.value });
+    fixture.destroy();
   });
 
   it('passes the note paragraphs as data and refreshes them when they change', () => {

@@ -404,7 +404,6 @@ type ConversationSummary = {
   title?: string;
   ownerId?: string;
   canSendMessage?: boolean;
-  running?: boolean;
   createdAt?: string;
   updatedAt?: string;
 };
@@ -425,13 +424,7 @@ export const createAssistantTransport = (
 ): AssistantTransport => {
   const base = `${apiBase.replace(/\/$/, '')}/notes/${encodeURIComponent(noteId)}/conversations`;
   const runs = runsFor(socket);
-  const recoveryErrors = new Map<string, { error: unknown; reported: boolean }>();
   const toConversation = (conversation: ConversationSummary): AssistantConversation => {
-    // This socket never owned a run found on reload, so its completion must be recovered through REST.
-    if (conversation.running === true && !runs.pending.has(conversation.id) && !runs.active.has(conversation.id)) {
-      runs.disconnected.add(conversation.id);
-      notifyRunState(runs, conversation.id);
-    }
     return {
       id: conversation.id,
       title: conversation.title,
@@ -452,63 +445,14 @@ export const createAssistantTransport = (
       let listeners = runs.listeners.get(conversationId);
       if (!listeners) runs.listeners.set(conversationId, (listeners = new Set()));
       let stopped = false;
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      let request: AbortController | undefined;
-      let failures = 0;
-      // The old socket cannot receive completion. Query only while an observed run needs recovery.
-      const reconcile = async () => {
-        timer = undefined;
-        if (stopped || !runs.disconnected.has(conversationId)) return;
-        const controller = new AbortController();
-        request = controller;
-        const timeout = setTimeout(() => controller.abort(), 10_000);
-        try {
-          const conversation = await requestJson<ConversationSummary>(
-            `${base}/${encodeURIComponent(conversationId)}`,
-            { signal: controller.signal },
-            onAuthError
-          );
-          if (typeof conversation.running !== 'boolean') {
-            throw new AssistantProtocolError('Conversation running status is required');
-          }
-          failures = 0;
-          if (!stopped && runs.disconnected.has(conversationId) && conversation.running === false) {
-            runs.disconnected.delete(conversationId);
-            notifyRunState(runs, conversationId);
-          }
-        } catch (error) {
-          // Retry transient failures, but leave recovery with a visible error instead of locking input forever.
-          const terminal =
-            error instanceof AssistantProtocolError ||
-            (error instanceof AssistantHttpError && error.status < 500 && error.status !== 429);
-          if (!stopped && runs.disconnected.has(conversationId) && (terminal || ++failures >= 3)) {
-            recoveryErrors.set(conversationId, { error, reported: false });
-            runs.disconnected.delete(conversationId);
-            notifyRunState(runs, conversationId);
-          }
-        } finally {
-          clearTimeout(timeout);
-          request = undefined;
-          if (!stopped && runs.disconnected.has(conversationId)) timer = setTimeout(reconcile, 2_000);
-        }
-      };
       const observe = (state: AssistantRunState) => {
         listener(state);
-        if (state !== 'disconnected') {
-          failures = 0;
-          clearTimeout(timer);
-          timer = undefined;
-          request?.abort();
-        }
-        if (state === 'disconnected' && !stopped && !timer && !request) timer = setTimeout(reconcile, 2_000);
       };
       listeners.add(observe);
       observe(runState(runs, conversationId));
       const stop = () => {
         if (stopped) return;
         stopped = true;
-        clearTimeout(timer);
-        request?.abort();
         listeners.delete(observe);
         if (!listeners.size) runs.listeners.delete(conversationId);
         socket.signal?.removeEventListener('abort', stop);
@@ -534,33 +478,13 @@ export const createAssistantTransport = (
       await requestJson<void>(`${base}/${encodeURIComponent(conversationId)}`, { method: 'DELETE' }, onAuthError);
     },
     getMessages: async (conversationId, before): Promise<AssistantMessagePage> => {
-      // Report the failed recovery once, then verify server status before a manual history retry.
-      const recovery = recoveryErrors.get(conversationId);
-      if (recovery) {
-        if (!recovery.reported) {
-          recovery.reported = true;
-          throw recovery.error;
-        }
-        const conversation = await requestJson<ConversationSummary>(
-          `${base}/${encodeURIComponent(conversationId)}`,
-          {},
-          onAuthError
-        );
-        if (typeof conversation.running !== 'boolean') {
-          throw new AssistantProtocolError('Conversation running status is required');
-        }
-        recoveryErrors.delete(conversationId);
-        if (conversation.running && !runs.pending.has(conversationId) && !runs.active.has(conversationId)) {
-          runs.disconnected.add(conversationId);
-          notifyRunState(runs, conversationId);
-        }
-      }
       const cursor = before ? `&cursor=${encodeURIComponent(before)}` : '';
       const page = await requestJson<MessagePage>(
         `${base}/${encodeURIComponent(conversationId)}/messages?limit=${HISTORY_PAGE_SIZE}${cursor}`,
         {},
         onAuthError
       );
+      if (!before && runs.disconnected.delete(conversationId)) notifyRunState(runs, conversationId);
       // The server pages from the latest message backwards; the panel renders oldest to newest.
       return { messages: toVisibleMessages([...page.messages].reverse()), earlierCursor: page.cursor ?? null };
     },
@@ -579,8 +503,8 @@ export const createAssistantTransport = (
 };
 
 /**
- * Guards a per-note transport. After `setActive(false)` (note change or unmount) every pending or later call rejects
- * with an AbortError and open runs are aborted, so a late response from the previous note cannot reach the new one.
+ * Guards a per-note transport. Deactivation aborts open runs and rejects calls while inactive.
+ * The transport can be reactivated unless its session signal has aborted.
  */
 export const scopeTransport = (inner: AssistantTransport, sessionSignal?: AbortSignal) => {
   let active = true;

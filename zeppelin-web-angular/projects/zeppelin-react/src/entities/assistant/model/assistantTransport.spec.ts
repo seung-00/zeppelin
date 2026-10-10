@@ -706,90 +706,25 @@ describe('retained run state', () => {
     }
   );
 
-  it('recovers a run discovered on a fresh page without following the old socket', async () => {
-    vi.useFakeTimers();
+  it('uses the server conversation response without a running field', async () => {
     const fetch = vi
       .fn()
-      .mockResolvedValueOnce(new Response(JSON.stringify({ body: [{ id: 'conversation', running: true }] })))
-      .mockResolvedValueOnce(new Response(JSON.stringify({ body: { running: true } })))
-      .mockResolvedValueOnce(new Response(JSON.stringify({ body: { running: false } })));
-    vi.stubGlobal('fetch', fetch);
-    const socket = fakeSocket();
-    const transport = createAssistantTransport('/api', 'note', socket);
-    await transport.listConversations();
-    const states: AssistantRunState[] = [];
-    const stop = transport.subscribeRunState!('conversation', state => states.push(state));
-    expect(states).toEqual(['disconnected']);
-    await vi.advanceTimersByTimeAsync(2_000);
-    expect(states).toEqual(['disconnected']);
-    await vi.advanceTimersByTimeAsync(2_000);
-    expect(states).toEqual(['disconnected', 'idle']);
-    expect(socket.listenerCount()).toBe(0);
-    expect(fetch).toHaveBeenCalledTimes(3);
-    stop();
-    expect(vi.getTimerCount()).toBe(0);
-  });
-
-  it.each(['network', 'server'] as const)(
-    'stops persistent %s recovery failures and surfaces an error on history reload',
-    async failure => {
-      vi.useFakeTimers();
-      const error = new TypeError('Offline');
-      const fetch = vi
-        .fn()
-        .mockResolvedValueOnce(new Response(JSON.stringify({ body: [{ id: 'conversation', running: true }] })));
-      if (failure === 'network') fetch.mockRejectedValue(error);
-      else fetch.mockImplementation(async () => new Response('', { status: 503 }));
-      vi.stubGlobal('fetch', fetch);
-      const transport = createAssistantTransport('/api', 'note', fakeSocket());
-      await transport.listConversations();
-      const states: AssistantRunState[] = [];
-      const stop = transport.subscribeRunState!('conversation', state => states.push(state));
-      await vi.advanceTimersByTimeAsync(6_000);
-      expect(states).toEqual(['disconnected', 'idle']);
-      await expect(transport.getMessages('conversation')).rejects.toBeInstanceOf(
-        failure === 'network' ? TypeError : AssistantHttpError
-      );
-      await vi.advanceTimersByTimeAsync(20_000);
-      expect(fetch).toHaveBeenCalledTimes(4);
-      expect(vi.getTimerCount()).toBe(0);
-      fetch
-        .mockResolvedValueOnce(new Response(JSON.stringify({ body: { running: false } })))
-        .mockResolvedValueOnce(new Response(JSON.stringify({ body: { messages: [], cursor: null } })));
-      await expect(transport.getMessages('conversation')).resolves.toEqual({ messages: [], earlierCursor: null });
-      expect(fetch).toHaveBeenCalledTimes(6);
-      expect(states).toEqual(['disconnected', 'idle']);
-      stop();
-    }
-  );
-
-  it('resumes polling on manual retry and grants a fresh failure budget before completion', async () => {
-    vi.useFakeTimers();
-    const fetch = vi
-      .fn()
-      .mockResolvedValueOnce(new Response(JSON.stringify({ body: [{ id: 'conversation', running: true }] })))
-      .mockRejectedValue(new TypeError('Offline'));
+      .mockResolvedValue(new Response(JSON.stringify({ body: [{ id: 'conversation', title: 'Question' }] })));
     vi.stubGlobal('fetch', fetch);
     const transport = createAssistantTransport('/api', 'note', fakeSocket());
-    await transport.listConversations();
+    expect(await transport.listConversations()).toEqual([{ id: 'conversation', title: 'Question' }]);
     const states: AssistantRunState[] = [];
     const stop = transport.subscribeRunState!('conversation', state => states.push(state));
-    await vi.advanceTimersByTimeAsync(6_000);
-    await expect(transport.getMessages('conversation')).rejects.toThrow('Offline');
-    fetch
-      .mockResolvedValueOnce(new Response(JSON.stringify({ body: { running: true } })))
-      .mockResolvedValueOnce(new Response(JSON.stringify({ body: { messages: [], cursor: null } })));
-    await transport.getMessages('conversation');
-    expect(states).toEqual(['disconnected', 'idle', 'disconnected']);
-    await vi.advanceTimersByTimeAsync(4_000);
-    expect(states).toEqual(['disconnected', 'idle', 'disconnected']);
-    await vi.advanceTimersByTimeAsync(2_000);
-    expect(states).toEqual(['disconnected', 'idle', 'disconnected', 'idle']);
-    await expect(transport.getMessages('conversation')).rejects.toThrow('Offline');
-    fetch
-      .mockResolvedValueOnce(new Response(JSON.stringify({ body: { running: true } })))
+    expect(states).toEqual(['idle']);
+    expect(fetch).toHaveBeenCalledTimes(1);
+    stop();
+  });
+
+  it('keeps a disconnected run visible until history reload succeeds', async () => {
+    const fetch = vi
+      .fn()
+      .mockRejectedValueOnce(new TypeError('Offline'))
       .mockResolvedValueOnce(new Response(JSON.stringify({ body: { messages: [], cursor: null } })))
-      .mockResolvedValueOnce(new Response(JSON.stringify({ body: { running: false } })))
       .mockResolvedValueOnce(
         new Response(
           JSON.stringify({
@@ -797,164 +732,6 @@ describe('retained run state', () => {
           })
         )
       );
-    await transport.getMessages('conversation');
-    await vi.advanceTimersByTimeAsync(2_000);
-    expect(states).toEqual(['disconnected', 'idle', 'disconnected', 'idle', 'disconnected', 'idle']);
-    await expect(transport.getMessages('conversation')).resolves.toEqual({
-      messages: [{ id: 'answer', role: 'assistant', content: 'Recovered answer' }],
-      earlierCursor: null
-    });
-    expect(fetch).toHaveBeenCalledTimes(13);
-    stop();
-    expect(vi.getTimerCount()).toBe(0);
-  });
-
-  it.each(['HTTP', 'protocol'] as const)(
-    'retains recovery after a manual status retry fails with a %s error',
-    async failure => {
-      vi.useFakeTimers();
-      const fetch = vi
-        .fn()
-        .mockResolvedValueOnce(new Response(JSON.stringify({ body: [{ id: 'conversation', running: true }] })))
-        .mockRejectedValue(new TypeError('Offline'));
-      vi.stubGlobal('fetch', fetch);
-      const transport = createAssistantTransport('/api', 'note', fakeSocket());
-      await transport.listConversations();
-      const states: AssistantRunState[] = [];
-      const stop = transport.subscribeRunState!('conversation', state => states.push(state));
-      await vi.advanceTimersByTimeAsync(6_000);
-      await expect(transport.getMessages('conversation')).rejects.toThrow('Offline');
-      fetch.mockResolvedValueOnce(
-        failure === 'HTTP' ? new Response('', { status: 503 }) : new Response(JSON.stringify({ body: {} }))
-      );
-      await expect(transport.getMessages('conversation')).rejects.toThrow();
-      expect(states).toEqual(['disconnected', 'idle']);
-      expect(fetch).toHaveBeenCalledTimes(5);
-      fetch
-        .mockResolvedValueOnce(new Response(JSON.stringify({ body: { running: false } })))
-        .mockResolvedValueOnce(new Response(JSON.stringify({ body: { messages: [], cursor: null } })));
-      await expect(transport.getMessages('conversation')).resolves.toEqual({ messages: [], earlierCursor: null });
-      expect(fetch).toHaveBeenCalledTimes(7);
-      stop();
-      expect(vi.getTimerCount()).toBe(0);
-    }
-  );
-
-  it('resets the recovery failure budget when the server still reports a running conversation', async () => {
-    vi.useFakeTimers();
-    const fetch = vi
-      .fn()
-      .mockResolvedValueOnce(new Response(JSON.stringify({ body: [{ id: 'conversation', running: true }] })))
-      .mockRejectedValueOnce(new TypeError('Offline'))
-      .mockRejectedValueOnce(new TypeError('Offline'))
-      .mockResolvedValueOnce(new Response(JSON.stringify({ body: { running: true } })))
-      .mockRejectedValueOnce(new TypeError('Offline'))
-      .mockResolvedValueOnce(new Response(JSON.stringify({ body: { running: false } })));
-    vi.stubGlobal('fetch', fetch);
-    const transport = createAssistantTransport('/api', 'note', fakeSocket());
-    await transport.listConversations();
-    const states: AssistantRunState[] = [];
-    const stop = transport.subscribeRunState!('conversation', state => states.push(state));
-    await vi.advanceTimersByTimeAsync(8_000);
-    expect(states).toEqual(['disconnected']);
-    await vi.advanceTimersByTimeAsync(2_000);
-    expect(states).toEqual(['disconnected', 'idle']);
-    fetch.mockResolvedValueOnce(new Response(JSON.stringify({ body: { messages: [], cursor: null } })));
-    await expect(transport.getMessages('conversation')).resolves.toEqual({ messages: [], earlierCursor: null });
-    stop();
-    expect(vi.getTimerCount()).toBe(0);
-  });
-
-  it('keeps a locally followed run on its socket when REST reports it running', async () => {
-    vi.useFakeTimers();
-    const fetch = vi
-      .fn()
-      .mockResolvedValue(new Response(JSON.stringify({ body: [{ id: 'conversation', running: true }] })));
-    vi.stubGlobal('fetch', fetch);
-    const socket = fakeSocket();
-    const transport = createAssistantTransport('/api', 'note', socket);
-    const controller = new AbortController();
-    const iterator = iterate(transport.openRun('conversation', { prompt: 'question' }, controller.signal));
-    const first = iterator.next();
-    socket.emit({ conversationId: 'conversation', type: 'run.started', payload: { runId: 'run' } });
-    await first;
-    await transport.listConversations();
-    const states: AssistantRunState[] = [];
-    const stop = transport.subscribeRunState!('conversation', state => states.push(state));
-    await vi.advanceTimersByTimeAsync(6_000);
-    expect(states).toEqual(['running']);
-    expect(fetch).toHaveBeenCalledTimes(1);
-    const complete = iterator.next();
-    socket.emit({ conversationId: 'conversation', type: 'run.completed', payload: { runId: 'run' } });
-    await complete;
-    await iterator.next();
-    expect(states[states.length - 1]).toBe('idle');
-    expect(states).not.toContain('disconnected');
-    stop();
-    expect(vi.getTimerCount()).toBe(0);
-  });
-
-  it('surfaces a missing recovery status instead of polling an incompatible response forever', async () => {
-    vi.useFakeTimers();
-    const fetch = vi
-      .fn()
-      .mockResolvedValueOnce(new Response(JSON.stringify({ body: [{ id: 'conversation', running: true }] })))
-      .mockResolvedValueOnce(new Response(JSON.stringify({ body: { id: 'conversation' } })));
-    vi.stubGlobal('fetch', fetch);
-    const transport = createAssistantTransport('/api', 'note', fakeSocket());
-    await transport.listConversations();
-    const states: AssistantRunState[] = [];
-    const stop = transport.subscribeRunState!('conversation', state => states.push(state));
-    await vi.advanceTimersByTimeAsync(2_000);
-    expect(states).toEqual(['disconnected', 'idle']);
-    await expect(transport.getMessages('conversation')).rejects.toThrow('could not read');
-    expect(fetch).toHaveBeenCalledTimes(2);
-    expect(vi.getTimerCount()).toBe(0);
-    stop();
-  });
-
-  it('recovers a disconnected run after the server finishes and cancels polling on unsubscribe', async () => {
-    vi.useFakeTimers();
-    const fetch = vi
-      .fn()
-      .mockRejectedValueOnce(new TypeError('Offline'))
-      .mockResolvedValueOnce(new Response(JSON.stringify({ body: { running: true } })))
-      .mockResolvedValueOnce(new Response(JSON.stringify({ body: { running: false } })));
-    vi.stubGlobal('fetch', fetch);
-    const socket = fakeSocket();
-    const transport = createAssistantTransport('/api', 'note', socket);
-    const states: AssistantRunState[] = [];
-    const stop = transport.subscribeRunState!('conversation', state => states.push(state));
-    const controller = new AbortController();
-    const iterator = iterate(transport.openRun('conversation', { prompt: 'question' }, controller.signal));
-    const first = iterator.next();
-    socket.emit({ conversationId: 'conversation', type: 'run.started', payload: { runId: 'run' } });
-    await first;
-    controller.abort();
-    await expect(iterator.next()).rejects.toThrow();
-    socket.close();
-    expect(states).toEqual(['idle', 'running', 'running', 'disconnected']);
-    await vi.advanceTimersByTimeAsync(2_000);
-    await vi.advanceTimersByTimeAsync(2_000);
-    expect(states[states.length - 1]).toBe('disconnected');
-    await vi.advanceTimersByTimeAsync(2_000);
-    expect(states[states.length - 1]).toBe('idle');
-    expect(fetch).toHaveBeenLastCalledWith(
-      '/api/notes/note/conversations/conversation',
-      expect.objectContaining({ credentials: 'include', signal: expect.any(AbortSignal) })
-    );
-    stop();
-    await vi.advanceTimersByTimeAsync(20_000);
-    expect(fetch).toHaveBeenCalledTimes(3);
-    expect(vi.getTimerCount()).toBe(0);
-  });
-
-  it('keeps a disconnected queued request pending until the server reports completion', async () => {
-    vi.useFakeTimers();
-    const fetch = vi
-      .fn()
-      .mockResolvedValueOnce(new Response(JSON.stringify({ body: { running: true } })))
-      .mockResolvedValueOnce(new Response(JSON.stringify({ body: { running: false } })));
     vi.stubGlobal('fetch', fetch);
     const socket = fakeSocket();
     const transport = createAssistantTransport('/api', 'note', socket);
@@ -965,47 +742,16 @@ describe('retained run state', () => {
     socket.close();
     await expect(first).rejects.toBeInstanceOf(AssistantConnectionError);
     expect(states[states.length - 1]).toBe('disconnected');
-    await vi.advanceTimersByTimeAsync(2_000);
+    await expect(transport.getMessages('conversation')).rejects.toThrow('Offline');
     expect(states[states.length - 1]).toBe('disconnected');
-    await vi.advanceTimersByTimeAsync(2_000);
-    expect(states[states.length - 1]).toBe('idle');
-    stop();
-    expect(vi.getTimerCount()).toBe(0);
-  });
-
-  it.each(['deactivate', 'abort'] as const)('cancels an in-flight recovery request on session %s', async action => {
-    vi.useFakeTimers();
-    let requestSignal: AbortSignal | undefined;
-    const fetch = vi.fn((_url, init: RequestInit) => {
-      requestSignal = init.signal ?? undefined;
-      return new Promise<Response>((_resolve, reject) => {
-        requestSignal!.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')));
-      });
+    await transport.getMessages('conversation', 'older-page');
+    expect(states[states.length - 1]).toBe('disconnected');
+    await expect(transport.getMessages('conversation')).resolves.toEqual({
+      messages: [{ id: 'answer', role: 'assistant', content: 'Recovered answer' }],
+      earlierCursor: null
     });
-    vi.stubGlobal('fetch', fetch);
-    const socket = fakeSocket();
-    const inner = createAssistantTransport('/api', 'note', socket);
-    const session = new AbortController();
-    const scoped = scopeTransport(inner, session.signal);
-    const states: AssistantRunState[] = [];
-    const stop = scoped.transport.subscribeRunState!('conversation', state => states.push(state));
-    const controller = new AbortController();
-    const iterator = iterate(inner.openRun('conversation', { prompt: 'question' }, controller.signal));
-    const first = iterator.next();
-    socket.emit({ conversationId: 'conversation', type: 'run.started', payload: { runId: 'run' } });
-    await first;
-    controller.abort();
-    await expect(iterator.next()).rejects.toThrow();
-    socket.close();
-    await vi.advanceTimersByTimeAsync(2_000);
-    expect(requestSignal?.aborted).toBe(false);
-    if (action === 'deactivate') scoped.setActive(false);
-    else session.abort();
-    await vi.advanceTimersByTimeAsync(20_000);
-    expect(requestSignal?.aborted).toBe(true);
-    expect(fetch).toHaveBeenCalledTimes(1);
-    expect(states[states.length - 1]).toBe('disconnected');
-    expect(vi.getTimerCount()).toBe(0);
+    expect(states[states.length - 1]).toBe('idle');
+    expect(fetch).toHaveBeenCalledTimes(3);
     stop();
   });
 

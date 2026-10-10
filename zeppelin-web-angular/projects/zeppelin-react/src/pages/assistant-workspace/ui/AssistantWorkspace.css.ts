@@ -42,7 +42,7 @@ export const panel = style({
   boxSizing: 'border-box',
   display: 'flex',
   flexDirection: 'column',
-  width: 'var(--assistant-panel-width)',
+  width: 'calc(var(--assistant-sidebar-width) - 40px)',
   height: 'calc(100dvh - var(--assistant-panel-top, 0px))',
   minHeight: 0,
   overflow: 'hidden',
@@ -52,16 +52,16 @@ export const panel = style({
   paddingTop: 8,
   '@media': {
     '(max-width: 640px)': {
-      width: 'min(var(--assistant-panel-width), 100vw)',
-      marginRight: 'calc(-1 * min(var(--assistant-panel-width), 100vw))',
+      width: 'min(var(--assistant-sidebar-width), 100vw)',
+      marginRight: 'calc(-1 * min(var(--assistant-sidebar-width), 100vw))',
       marginLeft: -40
     }
   }
 });
 export const panelSpacer = style({
-  flex: '0 0 var(--assistant-panel-width)',
-  width: 'var(--assistant-panel-width)',
-  minWidth: 'var(--assistant-panel-width)',
+  flex: '0 0 calc(var(--assistant-sidebar-width) - 40px)',
+  width: 'calc(var(--assistant-sidebar-width) - 40px)',
+  minWidth: 'calc(var(--assistant-sidebar-width) - 40px)',
   height: 0,
   transition: 'flex-basis 120ms ease, width 120ms ease, min-width 120ms ease',
   '@media': { '(max-width: 640px)': { display: 'none' } }
@@ -86,7 +86,6 @@ export const panelHeading = style({
   display: 'flex',
   flex: 'none',
   alignItems: 'center',
-  justifyContent: 'space-between',
   minHeight: 36,
   padding: '4px 8px 4px 12px',
   borderBottom: `1px solid ${vars.border}`
@@ -94,6 +93,26 @@ export const panelHeading = style({
 // Preserve specificity against the host dark theme's heading resets.
 export const panelTitle = style({
   selectors: { [`${panelHeading} &`]: { margin: 0, fontSize: 'inherit', fontWeight: 600 } }
+});
+export const panelClose = style({
+  position: 'absolute',
+  zIndex: 1,
+  top: 3,
+  right: 3,
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  width: 40,
+  height: 50,
+  padding: 0,
+  border: 0,
+  background: 'transparent',
+  color: vars.textSecondary,
+  cursor: 'pointer',
+  fontSize: 20,
+  transition: 'color 0.2s ease',
+  ':hover': { color: '#3071a9' },
+  ':focus-visible': { outline: `2px solid ${vars.focus}`, outlineOffset: -2 }
 });
 export const panelContent = style({ flex: 1, minHeight: 0, overflow: 'hidden' });
 globalStyle(`${panelContent} > ${assistantPanel}`, { height: '100%', minHeight: 0, overflow: 'hidden' });

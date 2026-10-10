@@ -171,13 +171,14 @@ const AssistantWorkspaceSession = (props: AssistantWorkspaceProps & AssistantTra
               >
                 <div className={styles.panelHeading}>
                   <h2 className={styles.panelTitle}>AI Assistant</h2>
-                  <Button
-                    type="text"
-                    size="small"
-                    icon={<CloseOutlined aria-hidden="true" />}
+                  <button
+                    type="button"
+                    className={styles.panelClose}
                     aria-label="Close AI Assistant"
                     onClick={closePanel}
-                  />
+                  >
+                    <CloseOutlined aria-hidden="true" />
+                  </button>
                 </div>
                 <div className={styles.panelContent}>
                   <Suspense fallback={<PanelSkeleton label="Loading the assistant…" chrome />}>

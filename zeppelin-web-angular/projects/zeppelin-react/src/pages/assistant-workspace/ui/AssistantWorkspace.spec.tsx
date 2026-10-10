@@ -404,6 +404,33 @@ describe('AssistantWorkspace', () => {
     expect(document.activeElement).toBe(toggle);
   });
 
+  it('keeps the conversation draft mounted across sidebar close and reopen', async () => {
+    const navigation = element();
+    const panel = element();
+    const listConversations = vi.fn().mockResolvedValue([]);
+    mountWorkspace({
+      ...transport({ listConversations }),
+      noteId: 'draft-note',
+      slots: [
+        { element: navigation, kind: 'navigation' },
+        { element: panel, kind: 'panel' }
+      ]
+    });
+    const toggle = within(navigation).getByRole('button', { name: 'Toggle AI Assistant' });
+    fireEvent.click(toggle);
+    const input = await within(panel).findByRole('textbox', { name: 'Message' });
+    await waitFor(() => expect(input).toHaveProperty('readOnly', false));
+    fireEvent.change(input, { target: { value: 'Keep this question' } });
+    fireEvent.click(within(panel).getByRole('button', { name: 'Close AI Assistant' }));
+    expect(toggle.getAttribute('aria-pressed')).toBe('false');
+    expect(within(panel).queryByRole('textbox', { name: 'Message' })).toBeNull();
+
+    fireEvent.click(toggle);
+    expect(within(panel).getByRole('textbox', { name: 'Message' })).toBe(input);
+    expect(input).toHaveProperty('value', 'Keep this question');
+    expect(listConversations).toHaveBeenCalledOnce();
+  });
+
   it('shares the sidebar width and resizes it within the sidebar range by drag or arrow keys', () => {
     const navigation = element();
     const panel = element();
@@ -421,7 +448,7 @@ describe('AssistantWorkspace', () => {
     mountWorkspace(props);
     fireEvent.click(within(navigation).getByRole('button', { name: 'Toggle AI Assistant' }));
     const resizer = within(panel).getByRole('separator', { name: 'Resize AI Assistant' });
-    expect(panel.style.getPropertyValue('--assistant-panel-width')).toBe('420px');
+    expect(panel.style.getPropertyValue('--assistant-sidebar-width')).toBe('420px');
 
     fireEvent.keyDown(resizer, { key: 'Home' });
     expect(onPanelWidthChange).toHaveBeenLastCalledWith(280);
@@ -435,7 +462,7 @@ describe('AssistantWorkspace', () => {
     // A drag shows each width without re-rendering and reports only where it ends, clamped to the sidebar's range.
     fireEvent.pointerDown(resizer, { button: 0, clientX: 500, pointerId: 1 });
     fireEvent.pointerMove(resizer, { clientX: 300, pointerId: 1, buttons: 1 });
-    expect(panel.style.getPropertyValue('--assistant-panel-width')).toBe('280px');
+    expect(panel.style.getPropertyValue('--assistant-sidebar-width')).toBe('280px');
     fireEvent.pointerMove(resizer, { clientX: 560, pointerId: 1, buttons: 1 });
     expect(resizer.getAttribute('aria-valuenow')).toBe('356');
     fireEvent.pointerUp(resizer, { pointerId: 1 });
@@ -445,7 +472,7 @@ describe('AssistantWorkspace', () => {
 
     // The host's width, shared with the notebook sidebar, wins once the drag is over.
     act(() => handle?.update({ ...props, panelWidth: 480 }));
-    expect(panel.style.getPropertyValue('--assistant-panel-width')).toBe('480px');
+    expect(panel.style.getPropertyValue('--assistant-sidebar-width')).toBe('480px');
   });
 
   it('sends from the panel and aborts the running request when the note changes', async () => {

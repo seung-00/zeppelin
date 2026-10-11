@@ -76,3 +76,42 @@
     padding: 0 5px;
   }
 });
+
+// A paragraph an assistant answer links to: Zeppelin's own focused shadow plus a soft primary ring that fades,
+// instead of the browser focus ring on the host (it is focused programmatically for keyboard users).
+zeppelin-notebook-paragraph.assistant-reveal-highlight:focus:not(:focus-visible) {
+  outline: none;
+}
+
+zeppelin-notebook-paragraph.assistant-reveal-highlight ::ng-deep .paragraph {
+  animation: assistant-reveal-glow 1.5s cubic-bezier(0.2, 0, 0.38, 0.9);
+}
+
+.themeMixin({
+  zeppelin-notebook-paragraph.assistant-reveal-highlight ::ng-deep .paragraph {
+    --assistant-reveal-ring: fade(@primary-color, 35%);
+  }
+});
+
+@keyframes assistant-reveal-glow {
+  0%,
+  40% {
+    box-shadow:
+      0 0 0 3px var(--assistant-reveal-ring),
+      0 0 5px rgba(0, 0, 0, 0.46);
+  }
+  100% {
+    box-shadow:
+      0 0 0 3px transparent,
+      0 0 5px rgba(0, 0, 0, 0.46);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  zeppelin-notebook-paragraph.assistant-reveal-highlight ::ng-deep .paragraph {
+    animation: none;
+    box-shadow:
+      0 0 0 3px var(--assistant-reveal-ring),
+      0 0 5px rgba(0, 0, 0, 0.46);
+  }
+}

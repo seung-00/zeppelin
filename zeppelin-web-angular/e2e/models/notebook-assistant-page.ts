@@ -17,6 +17,7 @@ export class NotebookAssistantPage extends BasePage {
   readonly remoteMount: Locator;
   readonly toggleButton: Locator;
   readonly panel: Locator;
+  readonly closeButton: Locator;
   readonly messageInput: Locator;
   readonly sendButton: Locator;
   /** The open conversation's title, named "Conversation: <title>"; it opens the conversation list. */
@@ -30,6 +31,7 @@ export class NotebookAssistantPage extends BasePage {
     this.remoteMount = page.locator('zeppelin-assistant-host [zeppelin-react-mount]');
     this.toggleButton = page.getByRole('button', { name: 'Toggle AI Assistant', exact: true });
     this.panel = page.getByRole('complementary', { name: 'AI Assistant workspace', exact: true });
+    this.closeButton = page.getByRole('button', { name: 'Close AI Assistant' });
     this.messageInput = this.panel.getByRole('textbox', { name: 'Message', exact: true });
     this.sendButton = this.panel.getByRole('button', { name: 'Send', exact: true });
     this.conversationPicker = this.panel.getByRole('button', { name: /^Conversation:/ });

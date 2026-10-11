@@ -97,8 +97,10 @@ export class AssistantHostComponent implements OnInit, DoCheck, OnDestroy {
 
   @Input() set note(note: Exclude<Note['note'], undefined>) {
     if (this.currentNote?.id !== note?.id) {
-      this.slots.requestPanelClose();
-      this.slots.setPanelOpen(false);
+      if (this.currentNote) {
+        this.slots.requestPanelClose();
+        this.slots.setPanelOpen(false);
+      }
       this.invalidateAssistant();
       this.assistantPanelFailed = false;
     }

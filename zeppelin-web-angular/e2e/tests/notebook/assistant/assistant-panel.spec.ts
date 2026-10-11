@@ -27,7 +27,7 @@ import {
 const QUESTION = 'What does this notebook do?';
 
 test.describe('Assistant panel', () => {
-  addPageAnnotationBeforeEach(PAGES.WORKSPACE.NOTEBOOK_ASSISTANT_HOST);
+  addPageAnnotationBeforeEach(PAGES.WORKSPACE.NOTEBOOK_ASSISTANT);
 
   let noteId: string;
   let assistant: NotebookAssistantPage;
